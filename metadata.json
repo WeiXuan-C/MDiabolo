@@ -1,0 +1,6 @@
+{
+  "name": "MDiabolo Local Scoring App",
+  "description": "A high-contrast, offline-first, professional scoring and real-time QR synchronization application designed for iPad and mobile. Features Place Method rankings, athlete profiles, and secure judging controls.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
