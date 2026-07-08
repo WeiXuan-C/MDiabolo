@@ -1,285 +1,471 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Athlete, Competition, Judge, EventConfig, ScoreSubmission, FaultSubmission,
-  SEEDED_ATHLETES, SEEDED_COMPETITIONS, SEEDED_JUDGES, SEEDED_EVENTS, SEEDED_SCORES, SEEDED_FAULTS
+import { useEffect, useState } from 'react';
+import { Cloud, CloudOff, Download, QrCode, Settings2, Upload, UserRound } from 'lucide-react';
+import QRCode from 'qrcode';
+import { BarcodeFormat, BarcodeScanner } from '@capacitor-mlkit/barcode-scanning';
+import {
+  type AdminAccount,
+  type AppSettings,
+  type Athlete,
+  type Competition,
+  type EventConfig,
+  type FaultSubmission,
+  type Judge,
+  type Language,
+  type ScoreSubmission,
+  SEEDED_ATHLETES,
+  SEEDED_COMPETITIONS,
+  SEEDED_EVENTS,
+  SEEDED_FAULTS,
+  SEEDED_JUDGES,
+  SEEDED_SCORES,
+  localizedName
 } from './initialData';
-import JudgePanel from './components/JudgePanel';
-import AdminPanel from './components/AdminPanel';
-import { Sliders, Database, ShieldAlert, Award, QrCode, Zap, HelpCircle } from 'lucide-react';
+import { AdminPanel } from './components/AdminPanel';
+import { JudgePanel } from './components/JudgePanel';
+import { loadLocal, saveLocal } from './utils/storage';
+import { repository } from './utils/repository';
+import { migrateAthletes, migrateCompetitions, migrateEvents, migrateJudges } from './utils/bilingual';
+import {
+  decodeDatabaseQrChunk,
+  encodeDatabaseSnapshot,
+  rebuildDatabaseSnapshot,
+  type DatabaseQrChunk,
+  type DatabaseSnapshot
+} from './utils/qr';
+
+type Screen = 'role' | 'judge-select' | 'judge' | 'admin';
+
+interface ExportQrPage extends DatabaseQrChunk {
+  dataUrl: string;
+}
 
 export default function App() {
-  // Identity routing: 'select_role' | 'judge_select' | 'judge' | 'admin'
-  const [currentRole, setCurrentRole] = useState<'select_role' | 'judge_select' | 'judge' | 'admin'>('select_role');
+  const [screen, setScreen] = useState<Screen>('role');
   const [selectedJudge, setSelectedJudge] = useState<Judge | null>(null);
+  const [online, setOnline] = useState(navigator.onLine);
+  const language: Language = 'zh';
+  const [fontScale, setFontScale] = useState<number>(() => loadLocal('fontScale', 100));
+  const [showDisplaySettings, setShowDisplaySettings] = useState(false);
+  const [athletes, setAthletes] = useState(() => loadLocal('athletes', SEEDED_ATHLETES));
+  const [competitions, setCompetitions] = useState(() => loadLocal('competitions', SEEDED_COMPETITIONS));
+  const [judges, setJudges] = useState(() => loadLocal('judges', SEEDED_JUDGES));
+  const [events, setEvents] = useState(() => loadLocal('events', SEEDED_EVENTS));
+  const [scores, setScores] = useState(() => loadLocal('scores', SEEDED_SCORES));
+  const [faults, setFaults] = useState(() => loadLocal('faults', SEEDED_FAULTS));
+  const [admins, setAdmins] = useState<AdminAccount[]>(() => loadLocal('admins', []));
+  const [settings, setSettings] = useState<AppSettings>(() => loadLocal('settings', {
+    activeEventId: SEEDED_EVENTS[0]?.id ?? ''
+  }));
+  const [hydrated, setHydrated] = useState(false);
+  const [syncNotice, setSyncNotice] = useState('');
+  const [exportQrPages, setExportQrPages] = useState<ExportQrPage[]>([]);
+  const [exportPageIndex, setExportPageIndex] = useState(0);
+  const [showImportPanel, setShowImportPanel] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [databaseQrChunks, setDatabaseQrChunks] = useState<Record<string, DatabaseQrChunk[]>>({});
 
-  // Core Persistent State
-  const [competitions, setCompetitions] = useState<Competition[]>([]);
-  const [athletes, setAthletes] = useState<Athlete[]>([]);
-  const [judges, setJudges] = useState<Judge[]>([]);
-  const [events, setEvents] = useState<EventConfig[]>([]);
-  const [scores, setScores] = useState<ScoreSubmission[]>([]);
-  const [faults, setFaults] = useState<FaultSubmission[]>([]);
-  const [activeEvent, setActiveEvent] = useState<EventConfig | null>(null);
-
-  // Load from local cache on mount
   useEffect(() => {
-    const cachedComps = localStorage.getItem('md_competitions');
-    const cachedAthletes = localStorage.getItem('md_athletes');
-    const cachedJudges = localStorage.getItem('md_judges');
-    const cachedEvents = localStorage.getItem('md_events');
-    const cachedScores = localStorage.getItem('md_scores');
-    const cachedFaults = localStorage.getItem('md_faults');
-    const cachedActiveEvent = localStorage.getItem('md_active_event');
-
-    setCompetitions(cachedComps ? JSON.parse(cachedComps) : SEEDED_COMPETITIONS);
-    setAthletes(cachedAthletes ? JSON.parse(cachedAthletes) : SEEDED_ATHLETES);
-    setJudges(cachedJudges ? JSON.parse(cachedJudges) : SEEDED_JUDGES);
-    setEvents(cachedEvents ? JSON.parse(cachedEvents) : SEEDED_EVENTS);
-    setScores(cachedScores ? JSON.parse(cachedScores) : SEEDED_SCORES);
-    setFaults(cachedFaults ? JSON.parse(cachedFaults) : SEEDED_FAULTS);
-    setActiveEvent(cachedActiveEvent ? JSON.parse(cachedActiveEvent) : SEEDED_EVENTS[0]);
+    const handleOnline = () => setOnline(true);
+    const handleOffline = () => setOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
 
-  // Sync state helpers
-  const saveToLocal = (key: string, data: any) => {
-    localStorage.setItem(key, JSON.stringify(data));
+  useEffect(() => {
+    const safeScale = Math.min(140, Math.max(80, fontScale));
+    document.documentElement.style.setProperty('--user-font-scale', String(safeScale / 100));
+    saveLocal('fontScale', safeScale);
+  }, [fontScale]);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      repository.load('athletes', SEEDED_ATHLETES),
+      repository.load('competitions', SEEDED_COMPETITIONS),
+      repository.load('judges', SEEDED_JUDGES),
+      repository.load('events', SEEDED_EVENTS),
+      repository.load('scores', SEEDED_SCORES),
+      repository.load('faults', SEEDED_FAULTS),
+      repository.load<AdminAccount[]>('admins', [])
+      , repository.load<AppSettings>('settings', { activeEventId: SEEDED_EVENTS[0]?.id ?? '' })
+    ]).then(([storedAthletes, storedCompetitions, storedJudges, storedEvents, storedScores, storedFaults, storedAdmins, storedSettings]) => {
+      if (!active) return;
+      const migratedCompetitions = migrateCompetitions(storedCompetitions, SEEDED_COMPETITIONS);
+      const migratedAthletes = migrateAthletes(storedAthletes, SEEDED_ATHLETES).map(athlete => ({
+        ...athlete,
+        competitionIds: athlete.competitionIds.length
+          ? athlete.competitionIds
+          : migratedCompetitions
+              .filter(item => item.rounds.some(round => round.athleteIds.includes(athlete.id)))
+              .map(item => item.id)
+      }));
+      const migratedJudges = migrateJudges(storedJudges, SEEDED_JUDGES);
+      const migratedEvents = migrateEvents(storedEvents, SEEDED_EVENTS);
+      setAthletes(migratedAthletes);
+      setCompetitions(migratedCompetitions);
+      setJudges(migratedJudges);
+      setEvents(migratedEvents);
+      setScores(storedScores);
+      setFaults(storedFaults);
+      setAdmins(storedAdmins);
+      const migratedSettings: AppSettings = {
+        ...storedSettings,
+        activeEventId: storedSettings.activeEventId ||
+          storedCompetitions.find(item => item.id === storedSettings.activeCompetitionId)?.eventId ||
+          storedEvents[0]?.id ||
+          ''
+      };
+      setSettings(migratedSettings);
+      void repository.save('athletes', migratedAthletes);
+      void repository.save('competitions', migratedCompetitions);
+      void repository.save('judges', migratedJudges);
+      void repository.save('events', migratedEvents);
+      void repository.save('settings', migratedSettings);
+      setHydrated(true);
+    });
+    return () => { active = false; };
+  }, []);
+
+  const update = <T,>(key: string, setter: (value: T) => void, value: T) => {
+    setter(value);
+    saveLocal(key, value);
+    void repository.save(key, value);
   };
 
-  const handleUpdateCompetitions = (newComps: Competition[]) => {
-    setCompetitions(newComps);
-    saveToLocal('md_competitions', newComps);
+  const databaseSnapshot = (): DatabaseSnapshot => ({
+    protocol: 'mdiabolo-db-v1',
+    exportedAt: new Date().toISOString(),
+    athletes,
+    competitions,
+    judges,
+    events,
+    scores,
+    faults,
+    admins,
+    settings
+  });
+
+  const mergeById = <T extends { id: string; submittedAt?: string }>(local: T[], incoming: T[]) => {
+    const map = new Map<string, T>();
+    local.forEach(item => map.set(item.id, item));
+    incoming.forEach(item => {
+      const current = map.get(item.id);
+      if (!current || (item.submittedAt ?? '') >= (current.submittedAt ?? '')) map.set(item.id, item);
+    });
+    return Array.from(map.values());
   };
 
-  const handleUpdateAthletes = (newAthletes: Athlete[]) => {
-    setAthletes(newAthletes);
-    saveToLocal('md_athletes', newAthletes);
+  const applyDatabaseSnapshot = (snapshot: DatabaseSnapshot) => {
+    const nextScores = mergeById(scores, snapshot.scores);
+    const nextFaults = mergeById(faults, snapshot.faults);
+    update<Athlete[]>('athletes', setAthletes, snapshot.athletes);
+    update<Competition[]>('competitions', setCompetitions, snapshot.competitions);
+    update<Judge[]>('judges', setJudges, snapshot.judges);
+    update<EventConfig[]>('events', setEvents, snapshot.events);
+    update<ScoreSubmission[]>('scores', setScores, nextScores);
+    update<FaultSubmission[]>('faults', setFaults, nextFaults);
+    update<AdminAccount[]>('admins', setAdmins, snapshot.admins);
+    update<AppSettings>('settings', setSettings, snapshot.settings);
   };
 
-  const handleUpdateJudges = (newJudges: Judge[]) => {
-    setJudges(newJudges);
-    saveToLocal('md_judges', newJudges);
+  const openExportDatabaseQr = async () => {
+    const chunks = encodeDatabaseSnapshot(databaseSnapshot());
+    const pages = await Promise.all(chunks.map(async chunk => ({
+      ...chunk,
+      dataUrl: await QRCode.toDataURL(chunk.data, { width: 360, margin: 2, errorCorrectionLevel: 'M' })
+    })));
+    setExportQrPages(pages);
+    setExportPageIndex(0);
+    setSyncNotice(L(`数据库 QR 已生成：共 ${pages.length} 页。`, `Database QR generated: ${pages.length} pages.`));
   };
 
-  const handleUpdateEvents = (newEvents: EventConfig[]) => {
-    setEvents(newEvents);
-    saveToLocal('md_events', newEvents);
+  const saveCurrentExportQrImage = async () => {
+    const page = exportQrPages[exportPageIndex];
+    if (!page) return;
+    const link = document.createElement('a');
+    link.href = page.dataUrl;
+    link.download = `MDiabolo-database-${page.index}-of-${page.total}.png`;
+    link.click();
   };
 
-  const handleSetActiveEvent = (newEvent: EventConfig) => {
-    setActiveEvent(newEvent);
-    saveToLocal('md_active_event', newEvent);
-  };
-
-  const handleAddScore = (newScore: ScoreSubmission) => {
-    const updated = [newScore, ...scores.filter(s => s.id !== newScore.id)];
-    setScores(updated);
-    saveToLocal('md_scores', updated);
-  };
-
-  const handleAddFault = (newFault: FaultSubmission) => {
-    const updated = [newFault, ...faults.filter(f => f.id !== newFault.id)];
-    setFaults(updated);
-    saveToLocal('md_faults', updated);
-  };
-
-  const handleLogout = () => {
-    setCurrentRole('select_role');
-    setSelectedJudge(null);
-  };
-
-  if (!activeEvent) {
-    return (
-      <div className="min-h-screen bg-[#0D0D0D] text-[#E0E0E0] flex items-center justify-center font-mono">
-        LOADING CORE TOURNAMENT DATA ENGINE...
-      </div>
-    );
-  }
-
-  // Handle active background gradient accents
-  const getThemeBgAccents = () => {
-    switch (activeEvent.backgroundTheme) {
-      case 'Cosmic':
-        return 'from-purple-950/10 via-indigo-950/5 to-black';
-      case 'Terminal':
-        return 'from-emerald-950/5 via-stone-950/5 to-black';
-      default: // Ember
-        return 'from-orange-950/10 via-stone-950/5 to-black';
+  const importDatabaseQrPayload = (payload: string) => {
+    try {
+      const chunk = decodeDatabaseQrChunk(payload);
+      const existing = databaseQrChunks[chunk.id] ?? [];
+      const nextChunks = [...existing.filter(item => item.index !== chunk.index), chunk];
+      setDatabaseQrChunks({ ...databaseQrChunks, [chunk.id]: nextChunks });
+      if (nextChunks.length < chunk.total) {
+        setSyncNotice(L(`已扫描 ${nextChunks.length}/${chunk.total} 页，请继续扫描下一页。`, `Scanned ${nextChunks.length}/${chunk.total} pages. Continue scanning.`));
+        return;
+      }
+      const snapshot = rebuildDatabaseSnapshot(nextChunks);
+      applyDatabaseSnapshot(snapshot);
+      setShowImportPanel(false);
+      setImportText('');
+      setDatabaseQrChunks({});
+      setSyncNotice(L('数据库导入完成。背景、赛事、人员和成绩已同步到本机。', 'Database import complete. Background, events, people and scores are synced to this device.'));
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : L('数据库 QR 导入失败。', 'Database QR import failed.'));
     }
   };
 
+  const scanDatabaseQr = async () => {
+    try {
+      const { supported } = await BarcodeScanner.isSupported();
+      if (!supported) {
+        setSyncNotice(L('此设备不支持原生扫码，请粘贴 QR 内容导入。', 'This device cannot scan natively. Paste QR content to import.'));
+        setShowImportPanel(true);
+        return;
+      }
+      const permission = await BarcodeScanner.requestPermissions();
+      if (permission.camera !== 'granted') {
+        setSyncNotice(L('需要相机权限才能导入数据库 QR。', 'Camera permission is required to import database QR.'));
+        return;
+      }
+      const { barcodes } = await BarcodeScanner.scan({ formats: [BarcodeFormat.QrCode], autoZoom: true });
+      const value = barcodes[0]?.rawValue ?? barcodes[0]?.displayValue;
+      if (!value) throw new Error(L('没有读取到 QR 数据', 'No QR data was detected'));
+      importDatabaseQrPayload(value);
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : L('扫码失败。', 'Scanning failed.'));
+    }
+  };
+  const saveScore = (score: ScoreSubmission) => {
+    const next = [score, ...scores.filter(item => item.id !== score.id)];
+    update('scores', setScores, next);
+    if (score.syncStatus !== 'synced') void repository.enqueue('score', score.id, score);
+  };
+  const saveFault = (fault: FaultSubmission) => {
+    const next = [fault, ...faults.filter(item => item.id !== fault.id)];
+    update('faults', setFaults, next);
+    if (fault.syncStatus !== 'synced') void repository.enqueue('fault', fault.id, fault);
+  };
+  const logout = () => {
+    setSelectedJudge(null);
+    setScreen('role');
+  };
+  const activeEvent = events.find(item => item.id === settings.activeEventId);
+  const L = (zh: string, en: string) => `${zh} · ${en}`;
+
+  if (!hydrated) {
+    return <div className="startup">正在载入离线比赛数据库… · Loading offline competition database…</div>;
+  }
+
   return (
-    <div className={`w-full min-h-screen bg-[#0D0D0D] text-[#E0E0E0] font-sans flex flex-col justify-between overflow-hidden relative`}>
+    <div className="app-shell">
+      {/* Background Layer - Only background is affected by opacity */}
+      {settings.customBackground && settings.customBackground.type !== 'video' && (
+        <div
+          className="custom-background"
+          aria-hidden="true"
+          style={{
+            background: settings.customBackground.type === 'gradient' 
+              ? settings.customBackground.value 
+              : `url(${settings.customBackground.value}) center/cover no-repeat, #0d0d0e`,
+            opacity: (settings.customBackground.opacity ?? 100) / 100
+          }}
+        />
+      )}
       
-      {/* BACKGROUND ACCENT LAYERS */}
-      <div className={`absolute inset-0 bg-gradient-to-br ${getThemeBgAccents()} pointer-events-none z-0`}></div>
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] rounded-full bg-[#FF4E00]/2 pointer-events-none blur-[120px] z-0"></div>
-
-      {/* HEADER SECTION */}
-      <header className="h-16 bg-[#161616]/90 border-b border-[#222] flex items-center justify-between px-6 shrink-0 z-10 backdrop-blur-md">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-[#FF4E00] rounded-sm flex items-center justify-center font-bold text-black font-mono">M</div>
-          <div className="flex flex-col">
-            <span className="text-[10px] uppercase tracking-[0.2em] text-[#666] leading-none">MDiabolo Local</span>
-            <span className="text-xs font-bold tracking-tight text-white font-mono">SCORING SYSTEM v1.0</span>
-          </div>
+      {/* Video Background */}
+      {settings.customBackground?.type === 'video' && settings.customBackground.value && (
+        <video
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="custom-background background-video"
+          aria-hidden="true"
+          style={{
+            objectFit: 'cover',
+            opacity: (settings.customBackground.opacity ?? 50) / 100
+          }}
+        >
+          <source src={settings.customBackground.value} type="video/mp4" />
+        </video>
+      )}
+      <header className="topbar">
+        <button className="brand" onClick={logout} aria-label={L('返回首页', 'Return home')}>
+          <span className="brand-mark">M</span>
+          <span><strong>MDiabolo</strong><small>{L('离线计分系统', 'Offline scoring system')}</small></span>
+        </button>
+        <div className="header-actions">
+          <button
+            className="sync-action"
+            onClick={() => void openExportDatabaseQr()}
+            aria-label={L('导出数据库 QR', 'Export database QR')}
+          >
+            <Download size={15} />
+            <span>{L('导出QR', 'Export QR')}</span>
+          </button>
+          <button
+            className="sync-action"
+            onClick={() => setShowImportPanel(true)}
+            aria-label={L('导入数据库 QR', 'Import database QR')}
+          >
+            <Upload size={15} />
+            <span>{L('导入', 'Import')}</span>
+          </button>
+          <button
+            className="display-toggle"
+            onClick={() => setShowDisplaySettings(value => !value)}
+            aria-expanded={showDisplaySettings}
+            aria-label={L('显示与字体设置', 'Display and font settings')}
+          >
+            <span aria-hidden="true">A</span>
+          </button>
+          <span className={`network-pill ${online ? 'online' : ''}`}>
+            {online ? <Cloud size={15} /> : <CloudOff size={15} />}
+            {online ? L('在线 · 可同步', 'Online · Sync ready') : L('离线 · 本机保存', 'Offline · Saved locally')}
+          </span>
         </div>
-
-        <div className="flex items-center gap-6">
-          <div className="flex flex-col items-end">
-            <span className="text-[9px] uppercase tracking-widest text-[#666]">Active Brand Context</span>
-            <span className="text-xs font-mono text-[#FF4E00]">{activeEvent.name}</span>
-          </div>
-          <div className="h-8 w-[1px] bg-[#333]"></div>
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-            <span className="text-[9px] uppercase tracking-widest text-[#999] font-mono">SQLite cache simulated</span>
-          </div>
-        </div>
-      </header>
-
-      {/* CORE ROUTING AND PANELS */}
-      <main className="flex-1 flex overflow-hidden z-10 relative">
-        
-        {currentRole === 'select_role' && (
-          <div className="flex-1 flex flex-col items-center justify-center p-4 max-w-lg mx-auto">
-            <div className="text-center mb-8">
-              <span className="px-2 py-0.5 bg-[#FF4E00]/10 text-[#FF4E00] border border-[#FF4E00]/20 rounded text-[9px] uppercase font-mono tracking-widest">
-                OFFLINE TOURNAMENT HUB
-              </span>
-              <h1 className="text-3xl font-black text-white mt-3 uppercase tracking-tight">Select Terminal Identity</h1>
-              <p className="text-xs text-[#888] mt-2 max-w-sm mx-auto leading-relaxed">
-                Connect your device as a certified judge to input scores, or enter the administrator control deck to view the place standings.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
-              {/* JUDGE PORTAL SELECTOR */}
-              <button
-                id="select-judge-role-btn"
-                onClick={() => setCurrentRole('judge_select')}
-                className="p-6 bg-[#121212] border border-[#222] hover:border-[#FF4E00] hover:shadow-[0_8px_30px_rgba(255,78,0,0.1)] rounded-2xl flex flex-col items-center text-center gap-4 transition-all group"
-              >
-                <div className="w-12 h-12 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 flex items-center justify-center group-hover:bg-[#FF4E00]/10 group-hover:border-[#FF4E00]/20 group-hover:text-[#FF4E00] transition-colors">
-                  <Sliders size={20} />
-                </div>
-                <div>
-                  <h3 className="text-sm font-black text-white uppercase tracking-wider">Scoring Operators</h3>
-                  <p className="text-[11px] text-[#666] mt-1 leading-snug">Log dimension points & technical mistake logs directly for offline QR transfer.</p>
-                </div>
-              </button>
-
-              {/* ADMIN CONTROL DECK SELECTOR */}
-              <button
-                id="select-admin-role-btn"
-                onClick={() => setCurrentRole('admin')}
-                className="p-6 bg-[#121212] border border-[#222] hover:border-[#FF4E00] hover:shadow-[0_8px_30px_rgba(255,78,0,0.1)] rounded-2xl flex flex-col items-center text-center gap-4 transition-all group"
-              >
-                <div className="w-12 h-12 rounded-xl bg-orange-500/10 border border-orange-500/20 text-[#FF4E00] flex items-center justify-center transition-colors">
-                  <Database size={20} />
-                </div>
-                <div>
-                  <h3 className="text-sm font-black text-white uppercase tracking-wider">Admin Terminal</h3>
-                  <p className="text-[11px] text-[#666] mt-1 leading-snug">Compile standings automatically via the Place Method, and manage competitors directory.</p>
-                </div>
-              </button>
-            </div>
-          </div>
+        {syncNotice && (
+          <button className="header-notice" onClick={() => setSyncNotice('')} aria-label={L('关闭同步提示', 'Close sync notice')}>
+            {syncNotice}
+          </button>
         )}
-
-        {/* JUDGE IDENTITY SELECT PANEL */}
-        {currentRole === 'judge_select' && (
-          <div className="flex-1 flex flex-col items-center justify-center p-4 max-w-sm mx-auto">
-            <div className="text-center mb-6 w-full">
-              <span className="text-[10px] uppercase tracking-widest text-[#FF4E00] font-mono block mb-1">ACCESS CONTROLS</span>
-              <h2 className="text-xl font-bold text-white uppercase">Accredited Judge Login</h2>
-              <p className="text-xs text-[#666] mt-1">Select your designated profile below to commence scoring duties.</p>
+        {showDisplaySettings && (
+          <div className="display-popover" role="dialog" aria-label={L('显示设置', 'Display settings')}>
+            <div className="display-popover-heading">
+              <strong>{L('字体大小', 'Font size')}</strong>
+              <output>{fontScale}%</output>
             </div>
-
-            <div className="bg-[#121212] border border-[#222] rounded-xl p-4 w-full space-y-2">
-              {judges.map(judge => (
-                <button
-                  key={judge.id}
-                  id={`judge-login-btn-${judge.id}`}
-                  onClick={() => {
-                    setSelectedJudge(judge);
-                    setCurrentRole('judge');
-                  }}
-                  className="w-full p-3.5 bg-[#161616] hover:bg-[#222] border border-[#222] hover:border-[#333] rounded-lg text-left flex justify-between items-center transition-all"
-                >
-                  <div>
-                    <span className="font-bold text-white text-sm block">{judge.name}</span>
-                    <span className="text-[9px] text-[#666] font-mono mt-0.5 block uppercase">ID Code: #{judge.id}</span>
-                  </div>
-                  <span className={`px-2 py-0.5 rounded text-[9px] font-mono border ${
-                    judge.role === 'Technical' 
-                      ? 'bg-[#FF4E00]/10 text-[#FF4E00] border-[#FF4E00]/20' 
-                      : 'bg-green-500/10 text-green-400 border-green-500/20'
-                  }`}>
-                    {judge.role}
-                  </span>
+            <input
+              type="range"
+              min="80"
+              max="140"
+              step="5"
+              value={fontScale}
+              onChange={event => setFontScale(Number(event.target.value))}
+              aria-label={L('调整字体大小', 'Adjust font size')}
+            />
+            <div className="display-presets">
+              {[90, 100, 115, 130].map(size => (
+                <button key={size} className={fontScale === size ? 'active' : ''} onClick={() => setFontScale(size)}>
+                  {size}%
                 </button>
               ))}
-
-              <button
-                onClick={() => setCurrentRole('select_role')}
-                className="w-full py-2 text-center text-xs text-[#666] hover:text-[#999] uppercase tracking-wider font-bold pt-4 block"
-              >
-                Cancel & Return
-              </button>
+            </div>
+            <small>{L('只保存在这台设备上', 'Saved only on this device')}</small>
+          </div>
+        )}
+        {exportQrPages.length > 0 && (
+          <div className="modal-backdrop" role="presentation" onClick={() => setExportQrPages([])}>
+            <div className="modal-card qr-card" role="dialog" aria-modal="true" aria-label={L('导出数据库 QR', 'Export database QR')} onClick={event => event.stopPropagation()}>
+              <h2>{L('导出数据库 QR', 'Export database QR')}</h2>
+              <p>{L('另一台设备点击「导入」后，依序扫描所有页面。', 'On another device, tap Import and scan every page in order.')}</p>
+              <strong>{L(`第 ${exportQrPages[exportPageIndex]?.index ?? 1} / ${exportQrPages[exportPageIndex]?.total ?? 1} 页`, `Page ${exportQrPages[exportPageIndex]?.index ?? 1} / ${exportQrPages[exportPageIndex]?.total ?? 1}`)}</strong>
+              {exportQrPages[exportPageIndex] && <img src={exportQrPages[exportPageIndex].dataUrl} alt={L('数据库同步 QR', 'Database sync QR')} />}
+              <div className="qr-page-actions">
+                <button className="secondary-button" disabled={exportPageIndex === 0} onClick={() => setExportPageIndex(index => Math.max(0, index - 1))}>{L('上一页', 'Previous')}</button>
+                <button className="secondary-button" disabled={exportPageIndex >= exportQrPages.length - 1} onClick={() => setExportPageIndex(index => Math.min(exportQrPages.length - 1, index + 1))}>{L('下一页', 'Next')}</button>
+              </div>
+              <button className="secondary-button" onClick={() => void saveCurrentExportQrImage()}>{L('保存当前 QR 图片', 'Save current QR image')}</button>
+              <button className="primary-button" onClick={() => setExportQrPages([])}>{L('完成', 'Done')}</button>
             </div>
           </div>
         )}
+        {showImportPanel && (
+          <div className="modal-backdrop" role="presentation" onClick={() => setShowImportPanel(false)}>
+            <div className="modal-card" role="dialog" aria-modal="true" aria-label={L('导入数据库', 'Import database')} onClick={event => event.stopPropagation()}>
+              <h2>{L('导入数据库', 'Import database')}</h2>
+              <p>{L('扫描另一台设备导出的数据库 QR。若有多页，请每页都扫描一次。', 'Scan the database QR from another device. If it has multiple pages, scan every page once.')}</p>
+              <button className="primary-button" onClick={() => void scanDatabaseQr()}><QrCode size={18} />{L('打开相机扫码', 'Open camera scanner')}</button>
+              <textarea value={importText} onChange={event => setImportText(event.target.value)} placeholder="MDDB|..." rows={5} />
+              <button className="secondary-button" disabled={!importText.trim()} onClick={() => importDatabaseQrPayload(importText)}>{L('粘贴导入', 'Import pasted data')}</button>
+            </div>
+          </div>
+        )}
+      </header>
 
-        {/* ACTIVE JUDGE PORTAL VIEW */}
-        {currentRole === 'judge' && selectedJudge && (
+      <main className="page">
+        {screen === 'role' && (
+          <section className="welcome">
+            <div className="current-competition">
+              <small>{L('当前赛事', 'Current event')}</small>
+              <strong>{activeEvent ? localizedName(activeEvent, language) : L('管理员尚未选择', 'Not selected by administrator')}</strong>
+            </div>
+            <div className="eyebrow">{L('比赛现场入口', 'Competition access')}</div>
+            <h1>{L('选择你的身份', 'Choose your role')}</h1>
+            <p>{L('所有评分会先保存在本机。即使断网，也不会中断比赛。', 'All scores are saved on this device first. The competition continues even without internet.')}</p>
+            <div className="role-grid">
+              <button className="role-card" onClick={() => setScreen('judge-select')}>
+                <UserRound aria-hidden="true" />
+                <span><strong>{L('我是裁判', 'I am a judge')}</strong><small>{L('选择姓名后开始评分', 'Select your name to start scoring')}</small></span>
+              </button>
+              <button className="role-card" onClick={() => setScreen('admin')}>
+                <Settings2 aria-hidden="true" />
+                <span><strong>{L('管理员', 'Administrator')}</strong><small>{L('管理比赛、回合与排名', 'Manage competitions, rounds and rankings')}</small></span>
+              </button>
+            </div>
+          </section>
+        )}
+
+        {screen === 'judge-select' && (
+          <section className="narrow">
+            <div className="section-heading">
+              <div><div className="eyebrow">{L('裁判入口', 'Judge access')}</div><h1>{L('请选择姓名', 'Select your name')}</h1></div>
+              <button className="text-button" onClick={() => setScreen('role')}>{L('返回', 'Back')}</button>
+            </div>
+            <div className="stack">
+              {judges.map(judge => (
+                <button
+                  className="list-button"
+                  key={judge.id}
+                  onClick={() => { setSelectedJudge(judge); setScreen('judge'); }}
+                >
+                  <span><strong>{localizedName(judge, language)}</strong><small>{judge.id}</small></span>
+                  <span className="tag">{judge.role === 'Technical' ? L('技术裁判', 'Technical') : L('评分裁判', 'Scoring')}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {screen === 'judge' && selectedJudge && (
           <JudgePanel
             judge={selectedJudge}
             competitions={competitions}
             athletes={athletes}
             scores={scores}
             faults={faults}
-            onAddScore={handleAddScore}
-            onAddFault={handleAddFault}
-            onLogout={handleLogout}
+            onSaveScore={saveScore}
+            onSaveFault={saveFault}
+            onLogout={logout}
+            language={language}
           />
         )}
 
-        {/* ACTIVE ADMIN DECK VIEW */}
-        {currentRole === 'admin' && (
+        {screen === 'admin' && (
           <AdminPanel
-            competitions={competitions}
             athletes={athletes}
+            competitions={competitions}
             judges={judges}
             events={events}
             scores={scores}
             faults={faults}
-            activeEvent={activeEvent}
-            onUpdateCompetitions={handleUpdateCompetitions}
-            onUpdateAthletes={handleUpdateAthletes}
-            onUpdateJudges={handleUpdateJudges}
-            onUpdateEvents={handleUpdateEvents}
-            onSetActiveEvent={handleSetActiveEvent}
-            onImportScore={handleAddScore}
-            onImportFault={handleAddFault}
-            onLogout={handleLogout}
+            admins={admins}
+            online={online}
+            language={language}
+            settings={settings}
+            onChangeAthletes={value => update<Athlete[]>('athletes', setAthletes, value)}
+            onChangeCompetitions={value => update<Competition[]>('competitions', setCompetitions, value)}
+            onChangeJudges={value => update<Judge[]>('judges', setJudges, value)}
+            onChangeEvents={value => update<EventConfig[]>('events', setEvents, value)}
+            onChangeAdmins={value => update<AdminAccount[]>('admins', setAdmins, value)}
+            onChangeSettings={value => update<AppSettings>('settings', setSettings, value)}
+            onSaveScore={saveScore}
+            onSaveFault={saveFault}
+            databaseSnapshot={databaseSnapshot()}
+            onApplyDatabaseSnapshot={applyDatabaseSnapshot}
+            onLogout={logout}
           />
         )}
-
       </main>
-
-      {/* FOOTER METADATA BAR */}
-      <footer className="h-8 bg-[#0a0a0a] border-t border-[#1a1a1a] flex items-center justify-between px-6 shrink-0 z-10 text-[9px] text-[#444] uppercase tracking-widest font-mono">
-        <div className="flex gap-4">
-          <span>Session: Active Offline Cache Mode</span>
-          <span>|</span>
-          <span>Storage: Client-Side localStorage</span>
-          <span>|</span>
-          <span>Target: iPad/Mobile UI Pack</span>
-        </div>
-        <div>
-          MDiabolo Scoring System &copy; 2026
-        </div>
-      </footer>
     </div>
   );
 }

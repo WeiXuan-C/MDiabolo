@@ -1,342 +1,210 @@
+export type CompetitionType = 'Individual Stage' | 'Duo/Team Stage' | 'Challenge';
+export type CompetitionStatus = 'Draft' | 'Active' | 'Completed';
+export type RoundStatus = 'Draft' | 'Active' | 'Completed';
+export type Language = 'zh' | 'en';
+
+export interface BackgroundConfig {
+  type: 'gradient' | 'image' | 'video';
+  value: string;
+  opacity?: number; // 0-100, default 100
+  appliedAt?: string; // ISO timestamp
+  name?: string; // User-friendly name for history
+}
+
+export interface AppSettings {
+  activeEventId: string;
+  /** Legacy field retained only for migration from v2 settings. */
+  activeCompetitionId?: string;
+  customBackground?: BackgroundConfig;
+  backgroundHistory?: BackgroundConfig[];
+}
+
 export interface Athlete {
   id: string;
   order: number;
   name: string;
+  nameZh?: string;
+  nameEn?: string;
   school: string;
   age: number;
   gender: 'Male' | 'Female' | 'Co-ed';
   country: string;
   teamName: string | null;
+  competitionIds: string[];
+}
+
+export interface CompetitionRound {
+  id: string;
+  name: string;
+  nameZh?: string;
+  nameEn?: string;
+  sequence: number;
+  status: RoundStatus;
+  athleteIds: string[];
+  advancingCount: number | null;
+  startTime?: string;
+  announcementTime?: string;
 }
 
 export interface Competition {
   id: string;
+  eventId: string;
   name: string;
-  type: 'Individual Stage' | 'Duo/Team Stage' | 'Challenge';
+  nameZh?: string;
+  nameEn?: string;
+  type: CompetitionType;
   region: string;
   division: string;
-  status: 'Draft' | 'Active' | 'Completed';
+  status: CompetitionStatus;
+  rounds: CompetitionRound[];
+  faultDeduction: number;
+  chiefJudge?: string;
+  recorder?: string;
 }
 
 export interface Judge {
   id: string;
   name: string;
+  nameZh?: string;
+  nameEn?: string;
   role: 'Scoring' | 'Technical';
+  competitionIds: string[];
 }
 
 export interface EventConfig {
   id: string;
   name: string;
+  nameZh?: string;
+  nameEn?: string;
   poster: string;
-  backgroundTheme: string;
+  backgroundVideo?: string;
+  backgroundTheme: 'Ember' | 'Cosmic' | 'Terminal' | 'Ocean' | 'Forest' | 'Sunset';
+}
+
+export interface ScoreDimensions {
+  action_difficulty: number;
+  stage_artistry?: number;
+  action_interaction?: number;
+  action_creativity: number;
+  action_fluency?: number;
+  costume_styling?: number;
 }
 
 export interface ScoreSubmission {
-  id: string; // compId_athleteId_judgeId
+  id: string;
   competitionId: string;
+  roundId: string;
   athleteId: string;
   judgeId: string;
   judgeName: string;
-  dimensions: {
-    action_difficulty: number;
-    stage_artistry?: number; // for individual and team
-    action_interaction?: number; // for team stage
-    action_creativity: number;
-    action_fluency?: number; // for individual and challenge
-    costume_styling?: number; // for individual and team
-  };
+  dimensions: ScoreDimensions;
   totalScore: number;
   submittedAt: string;
+  syncStatus?: 'local' | 'synced';
 }
 
 export interface FaultSubmission {
-  id: string; // compId_athleteId_tech
+  id: string;
   competitionId: string;
+  roundId: string;
   athleteId: string;
+  judgeId: string;
   faultsCount: number;
+  deductionPerFault: number;
   deductionAmount: number;
   submittedAt: string;
+  syncStatus?: 'local' | 'synced';
 }
 
-export const SEEDED_EVENTS: EventConfig[] = [
-  {
-    id: 'E-01',
-    name: 'MDiabolo International Cup 2026',
-    poster: 'https://images.unsplash.com/photo-1564981797816-1043664bf78d?q=80&w=600&auto=format&fit=crop',
-    backgroundTheme: 'Ember'
-  },
-  {
-    id: 'E-02',
-    name: 'Asia Pacific Diabolo Open',
-    poster: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?q=80&w=600&auto=format&fit=crop',
-    backgroundTheme: 'Cosmic'
-  }
-];
+export interface AdminAccount {
+  id: string;
+  name: string;
+  salt: string;
+  passwordHash: string;
+  createdAt: string;
+}
 
-export const SEEDED_JUDGES: Judge[] = [
-  { id: 'J-01', name: 'Marcus Wong (黃志銘)', role: 'Scoring' },
-  { id: 'J-02', name: 'Yuki Tanaka (田中勇気)', role: 'Scoring' },
-  { id: 'J-03', name: 'Chen Wei Ting (陳威廷)', role: 'Scoring' },
-  { id: 'J-tech', name: 'Fault Inspector (失誤裁判)', role: 'Technical' }
-];
-
-export const SEEDED_COMPETITIONS: Competition[] = [
-  {
-    id: 'INTL-2026-IND',
-    name: 'International Individual Stage Finals (個人決賽)',
-    type: 'Individual Stage',
-    region: 'Asia Pacific',
-    division: 'Open Individual / Male',
-    status: 'Active'
-  },
-  {
-    id: 'INTL-2026-TEAM',
-    name: 'Duo & Team Stage Showdown (雙人與團隊賽)',
-    type: 'Duo/Team Stage',
-    region: 'Asia Pacific',
-    division: 'Open Duo Group',
-    status: 'Active'
-  },
-  {
-    id: 'INTL-2026-CHALL',
-    name: 'Extreme Speed & Tech Challenge (極速挑戰賽)',
-    type: 'Challenge',
-    region: 'Taiwan Regional',
-    division: 'Youth Challenge Division',
-    status: 'Draft'
+export const getDimensionsConfig = (type: CompetitionType) => {
+  const common = [
+    { key: 'action_difficulty', label: '动作难度', labelEn: 'Difficulty', max: 30 },
+    { key: 'action_creativity', label: '动作创意', labelEn: 'Creativity', max: 30 }
+  ] as const;
+  if (type === 'Individual Stage') {
+    return [
+      common[0],
+      { key: 'stage_artistry', label: '舞台艺术', labelEn: 'Artistry', max: 30 },
+      common[1],
+      { key: 'action_fluency', label: '动作流畅', labelEn: 'Fluency', max: 30 },
+      { key: 'costume_styling', label: '服装造型', labelEn: 'Costume', max: 10 }
+    ] as const;
   }
-];
+  if (type === 'Duo/Team Stage') {
+    return [
+      common[0],
+      { key: 'stage_artistry', label: '舞台艺术', labelEn: 'Artistry', max: 30 },
+      { key: 'action_interaction', label: '动作互动', labelEn: 'Interaction', max: 30 },
+      common[1],
+      { key: 'costume_styling', label: '服装造型', labelEn: 'Costume', max: 10 }
+    ] as const;
+  }
+  return [
+    common[0],
+    common[1],
+    { key: 'action_fluency', label: '动作流畅', labelEn: 'Fluency', max: 30 }
+  ] as const;
+};
+
+export const SEEDED_EVENTS: EventConfig[] = [{
+  id: 'E-01',
+  name: 'MDiabolo International Cup 2026',
+  nameZh: 'MDiabolo 国际杯 2026',
+  nameEn: 'MDiabolo International Cup 2026',
+  poster: '',
+  backgroundTheme: 'Ember'
+}];
 
 export const SEEDED_ATHLETES: Athlete[] = [
-  {
-    id: 'ATH-0821',
-    order: 1,
-    name: 'Chen Wei Ting (陳威廷)',
-    school: 'Taipei Diabolo Association',
-    age: 18,
-    gender: 'Male',
-    country: 'Taiwan',
-    teamName: 'Taipei Diabolo A'
-  },
-  {
-    id: 'ATH-0822',
-    order: 2,
-    name: 'Marcus Wong (黃志銘)',
-    school: 'Kuala Lumpur Diabolo Club',
-    age: 20,
-    gender: 'Male',
-    country: 'Malaysia',
-    teamName: 'Kuala Lumpur Elite'
-  },
-  {
-    id: 'ATH-0823',
-    order: 3,
-    name: 'Yuki Tanaka (田中勇気)',
-    school: 'Tokyo Youth Performance School',
-    age: 17,
-    gender: 'Male',
-    country: 'Japan',
-    teamName: 'Tokyo Diabolo Club'
-  },
-  {
-    id: 'ATH-0824',
-    order: 4,
-    name: 'Lucas Dubois (杜波伊斯)',
-    school: 'Paris Circus Conservatory',
-    age: 19,
-    gender: 'Male',
-    country: 'France',
-    teamName: 'Paris Diabolo Team'
-  },
-  {
-    id: 'ATH-0825',
-    order: 5,
-    name: 'Zhang Jia Hao (張家豪)',
-    school: 'Beijing Diabolo Union',
-    age: 22,
-    gender: 'Male',
-    country: 'China',
-    teamName: 'Beijing Diabolo Union'
-  }
+  { id: 'ATH-0821', order: 1, name: '陈威廷', nameZh: '陈威廷', nameEn: 'Chen Wei Ting', school: 'Taipei Diabolo Association', age: 18, gender: 'Male', country: 'Taiwan', teamName: null, competitionIds: ['INTL-2026-IND'] },
+  { id: 'ATH-0822', order: 2, name: 'Marcus Wong', nameZh: '黄志铭', nameEn: 'Marcus Wong', school: 'Kuala Lumpur Diabolo Club', age: 20, gender: 'Male', country: 'Malaysia', teamName: null, competitionIds: ['INTL-2026-IND'] },
+  { id: 'ATH-0823', order: 3, name: 'Yuki Tanaka', nameZh: '田中勇气', nameEn: 'Yuki Tanaka', school: 'Tokyo Youth Performance School', age: 17, gender: 'Male', country: 'Japan', teamName: null, competitionIds: ['INTL-2026-IND'] },
+  { id: 'ATH-0824', order: 4, name: 'Lucas Dubois', nameZh: '卢卡斯·杜波伊斯', nameEn: 'Lucas Dubois', school: 'Paris Circus Conservatory', age: 19, gender: 'Male', country: 'France', teamName: null, competitionIds: ['INTL-2026-IND'] }
 ];
 
-// Initial seeded scores for INTL-2026-IND (Individual Stage)
-// This will populate the rankings list so it looks highly functional immediately!
-export const SEEDED_SCORES: ScoreSubmission[] = [
-  // Chen Wei Ting (ATH-0821)
-  {
-    id: 'INTL-2026-IND_ATH-0821_J-01',
-    competitionId: 'INTL-2026-IND',
-    athleteId: 'ATH-0821',
-    judgeId: 'J-01',
-    judgeName: 'Marcus Wong (黃志銘)',
-    dimensions: {
-      action_difficulty: 26.5,
-      stage_artistry: 24.0,
-      action_creativity: 25.5,
-      action_fluency: 23.0,
-      costume_styling: 8.5
-    },
-    totalScore: 107.5,
-    submittedAt: '2026-07-03T01:00:00-07:00'
-  },
-  {
-    id: 'INTL-2026-IND_ATH-0821_J-02',
-    competitionId: 'INTL-2026-IND',
-    athleteId: 'ATH-0821',
-    judgeId: 'J-02',
-    judgeName: 'Yuki Tanaka (田中勇気)',
-    dimensions: {
-      action_difficulty: 24.0,
-      stage_artistry: 25.5,
-      action_creativity: 23.0,
-      action_fluency: 26.0,
-      costume_styling: 9.0
-    },
-    totalScore: 107.5,
-    submittedAt: '2026-07-03T01:01:00-07:00'
-  },
-  {
-    id: 'INTL-2026-IND_ATH-0821_J-03',
-    competitionId: 'INTL-2026-IND',
-    athleteId: 'ATH-0821',
-    judgeId: 'J-03',
-    judgeName: 'Chen Wei Ting (陳威廷)',
-    dimensions: {
-      action_difficulty: 25.0,
-      stage_artistry: 24.5,
-      action_creativity: 25.0,
-      action_fluency: 24.5,
-      costume_styling: 8.0
-    },
-    totalScore: 107.0,
-    submittedAt: '2026-07-03T01:02:00-07:00'
-  },
+const allAthleteIds = SEEDED_ATHLETES.map(athlete => athlete.id);
 
-  // Marcus Wong (ATH-0822)
-  {
-    id: 'INTL-2026-IND_ATH-0822_J-01',
-    competitionId: 'INTL-2026-IND',
-    athleteId: 'ATH-0822',
-    judgeId: 'J-01',
-    judgeName: 'Marcus Wong (黃志銘)',
-    dimensions: {
-      action_difficulty: 22.0,
-      stage_artistry: 23.0,
-      action_creativity: 21.5,
-      action_fluency: 20.0,
-      costume_styling: 7.5
-    },
-    totalScore: 94.0,
-    submittedAt: '2026-07-03T01:03:00-07:00'
-  },
-  {
-    id: 'INTL-2026-IND_ATH-0822_J-02',
-    competitionId: 'INTL-2026-IND',
-    athleteId: 'ATH-0822',
-    judgeId: 'J-02',
-    judgeName: 'Yuki Tanaka (田中勇気)',
-    dimensions: {
-      action_difficulty: 23.5,
-      stage_artistry: 22.0,
-      action_creativity: 24.0,
-      action_fluency: 21.0,
-      costume_styling: 8.0
-    },
-    totalScore: 98.5,
-    submittedAt: '2026-07-03T01:04:00-07:00'
-  },
-  {
-    id: 'INTL-2026-IND_ATH-0822_J-03',
-    competitionId: 'INTL-2026-IND',
-    athleteId: 'ATH-0822',
-    judgeId: 'J-03',
-    judgeName: 'Chen Wei Ting (陳威廷)',
-    dimensions: {
-      action_difficulty: 22.5,
-      stage_artistry: 23.0,
-      action_creativity: 22.0,
-      action_fluency: 22.5,
-      costume_styling: 7.5
-    },
-    totalScore: 97.5,
-    submittedAt: '2026-07-03T01:05:00-07:00'
-  },
+export const SEEDED_COMPETITIONS: Competition[] = [{
+  id: 'INTL-2026-IND',
+  eventId: 'E-01',
+  name: '个人舞台赛',
+  nameZh: '个人舞台赛',
+  nameEn: 'Individual Stage',
+  type: 'Individual Stage',
+  region: 'Asia Pacific',
+  division: 'Open Individual',
+  status: 'Active',
+  faultDeduction: 0.5,
+  rounds: [
+    { id: 'R-QUAL', name: '预赛', nameZh: '预赛', nameEn: 'Qualifier', sequence: 1, status: 'Active', athleteIds: allAthleteIds, advancingCount: 3 },
+    { id: 'R-FINAL', name: '决赛', nameZh: '决赛', nameEn: 'Final', sequence: 2, status: 'Draft', athleteIds: [], advancingCount: null }
+  ]
+}];
 
-  // Yuki Tanaka (ATH-0823)
-  {
-    id: 'INTL-2026-IND_ATH-0823_J-01',
-    competitionId: 'INTL-2026-IND',
-    athleteId: 'ATH-0823',
-    judgeId: 'J-01',
-    judgeName: 'Marcus Wong (黃志銘)',
-    dimensions: {
-      action_difficulty: 25.0,
-      stage_artistry: 22.0,
-      action_creativity: 23.0,
-      action_fluency: 24.0,
-      costume_styling: 8.0
-    },
-    totalScore: 102.0,
-    submittedAt: '2026-07-03T01:06:00-07:00'
-  },
-  {
-    id: 'INTL-2026-IND_ATH-0823_J-02',
-    competitionId: 'INTL-2026-IND',
-    athleteId: 'ATH-0823',
-    judgeId: 'J-02',
-    judgeName: 'Yuki Tanaka (田中勇気)',
-    dimensions: {
-      action_difficulty: 26.0,
-      stage_artistry: 23.5,
-      action_creativity: 24.5,
-      action_fluency: 22.5,
-      costume_styling: 8.5
-    },
-    totalScore: 105.0,
-    submittedAt: '2026-07-03T01:07:00-07:00'
-  },
-  {
-    id: 'INTL-2026-IND_ATH-0823_J-03',
-    competitionId: 'INTL-2026-IND',
-    athleteId: 'ATH-0823',
-    judgeId: 'J-03',
-    judgeName: 'Chen Wei Ting (陳威廷)',
-    dimensions: {
-      action_difficulty: 24.0,
-      stage_artistry: 23.0,
-      action_creativity: 23.5,
-      action_fluency: 23.0,
-      costume_styling: 8.0
-    },
-    totalScore: 101.5,
-    submittedAt: '2026-07-03T01:08:00-07:00'
-  }
+export const SEEDED_JUDGES: Judge[] = [
+  { id: 'J-01', name: 'Marcus Wong', nameZh: '黄志铭', nameEn: 'Marcus Wong', role: 'Scoring', competitionIds: ['INTL-2026-IND'] },
+  { id: 'J-02', name: 'Yuki Tanaka', nameZh: '田中勇气', nameEn: 'Yuki Tanaka', role: 'Scoring', competitionIds: ['INTL-2026-IND'] },
+  { id: 'J-03', name: '陈威廷', nameZh: '陈威廷', nameEn: 'Chen Wei Ting', role: 'Scoring', competitionIds: ['INTL-2026-IND'] },
+  { id: 'J-TECH', name: '技术失误裁判', nameZh: '技术失误裁判', nameEn: 'Technical Fault Judge', role: 'Technical', competitionIds: ['INTL-2026-IND'] }
 ];
 
-export const SEEDED_FAULTS: FaultSubmission[] = [
-  {
-    id: 'INTL-2026-IND_ATH-0821_tech',
-    competitionId: 'INTL-2026-IND',
-    athleteId: 'ATH-0821',
-    faultsCount: 2,
-    deductionAmount: 1.0,
-    submittedAt: '2026-07-03T01:02:30-07:00'
-  },
-  {
-    id: 'INTL-2026-IND_ATH-0822_tech',
-    competitionId: 'INTL-2026-IND',
-    athleteId: 'ATH-0822',
-    faultsCount: 0,
-    deductionAmount: 0.0,
-    submittedAt: '2026-07-03T01:03:30-07:00'
-  },
-  {
-    id: 'INTL-2026-IND_ATH-0823_tech',
-    competitionId: 'INTL-2026-IND',
-    athleteId: 'ATH-0823',
-    faultsCount: 1,
-    deductionAmount: 0.5,
-    submittedAt: '2026-07-03T01:05:30-07:00'
-  }
-];
+export const SEEDED_SCORES: ScoreSubmission[] = [];
+export const SEEDED_FAULTS: FaultSubmission[] = [];
+
+export function localizedName(
+  item: { name: string; nameZh?: string; nameEn?: string } | undefined,
+  _language: Language
+): string {
+  if (!item) return '';
+  const zh = item.nameZh?.trim() || item.name;
+  const en = item.nameEn?.trim() || item.name;
+  return zh === en ? zh : `${zh} · ${en}`;
+}

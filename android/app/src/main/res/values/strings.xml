@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MDiabolo Scoring</string>
+    <string name="title_activity_main">MDiabolo Scoring</string>
+    <string name="package_name">studio.mdiabolo.scoring</string>
+    <string name="custom_url_scheme">studio.mdiabolo.scoring</string>
+</resources>

@@ -1,1390 +1,1186 @@
-import React, { useState, useEffect } from 'react';
-import { Athlete, Competition, Judge, EventConfig, ScoreSubmission, FaultSubmission, SEEDED_JUDGES } from '../initialData';
-import { calculatePlaceMethodRankings, CalculatedRow } from '../utils/ranking';
-import { 
-  Database, Award, Users, ShieldAlert, Plus, Trash2, Edit3, Save, 
-  CheckCircle, Sliders, Play, Settings, QrCode, Clipboard, AlertCircle, RefreshCw, Key
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import {
+  ArrowLeft,
+  Check,
+  ChevronRight,
+  CloudUpload,
+  GitBranch,
+  Plus,
+  QrCode,
+  Settings,
+  Trophy,
+  Users
 } from 'lucide-react';
+import {
+  type AdminAccount,
+  type AppSettings,
+  type Athlete,
+  type BackgroundConfig,
+  type Competition,
+  type EventConfig,
+  type FaultSubmission,
+  type Judge,
+  type Language,
+  type ScoreSubmission,
+  localizedName
+} from '../initialData';
+import { BarcodeFormat, BarcodeScanner } from '@capacitor-mlkit/barcode-scanning';
+import { createAdminAccount, verifyAdminPassword } from '../utils/auth';
+import { calculatePlaceMethodRankings } from '../utils/ranking';
+import { createId } from '../utils/storage';
+import { syncCompetitionRecords } from '../utils/sync';
+import { decodeQrRecord, type DatabaseSnapshot } from '../utils/qr';
+import { exportRankingToExcel, exportRankingToPDF } from '../utils/export';
+
+type AdminTab = 'rounds' | 'bracket' | 'ranking' | 'people' | 'sync' | 'settings';
 
 interface AdminPanelProps {
-  competitions: Competition[];
   athletes: Athlete[];
+  competitions: Competition[];
   judges: Judge[];
   events: EventConfig[];
   scores: ScoreSubmission[];
   faults: FaultSubmission[];
-  activeEvent: EventConfig;
-  onUpdateCompetitions: (comps: Competition[]) => void;
-  onUpdateAthletes: (aths: Athlete[]) => void;
-  onUpdateJudges: (jds: Judge[]) => void;
-  onUpdateEvents: (evts: EventConfig[]) => void;
-  onSetActiveEvent: (evt: EventConfig) => void;
-  onImportScore: (score: ScoreSubmission) => void;
-  onImportFault: (fault: FaultSubmission) => void;
+  admins: AdminAccount[];
+  online: boolean;
+  language: Language;
+  settings: AppSettings;
+  onChangeAthletes: (value: Athlete[]) => void;
+  onChangeCompetitions: (value: Competition[]) => void;
+  onChangeJudges: (value: Judge[]) => void;
+  onChangeEvents: (value: EventConfig[]) => void;
+  onChangeAdmins: (value: AdminAccount[]) => void;
+  onChangeSettings: (value: AppSettings) => void;
+  onSaveScore: (value: ScoreSubmission) => void;
+  onSaveFault: (value: FaultSubmission) => void;
+  databaseSnapshot: DatabaseSnapshot;
+  onApplyDatabaseSnapshot: (value: DatabaseSnapshot) => void;
   onLogout: () => void;
 }
 
-export default function AdminPanel({
-  competitions,
-  athletes,
-  judges,
-  events,
-  scores,
-  faults,
-  activeEvent,
-  onUpdateCompetitions,
-  onUpdateAthletes,
-  onUpdateJudges,
-  onUpdateEvents,
-  onSetActiveEvent,
-  onImportScore,
-  onImportFault,
-  onLogout
-}: AdminPanelProps) {
-  // Navigation tabs: 'rankings' | 'athletes' | 'competitions' | 'judges' | 'events' | 'sync'
-  const [activeTab, setActiveTab] = useState<'rankings' | 'athletes' | 'competitions' | 'judges' | 'events' | 'sync'>('rankings');
-  const [selectedCompId, setSelectedCompId] = useState<string>('');
-  const [expandedAthleteId, setExpandedAthleteId] = useState<string | null>(null);
-
-  // Password Login security state
-  const [isLocked, setIsLocked] = useState(true);
-  const [passwordInput, setPasswordInput] = useState('');
+export function AdminPanel(props: AdminPanelProps) {
+  const {
+    athletes,
+    competitions,
+    judges,
+    events,
+    scores,
+    faults,
+    admins,
+    online,
+    language,
+    settings,
+    onChangeAthletes,
+    onChangeCompetitions,
+    onChangeJudges,
+    onChangeEvents,
+    onChangeAdmins,
+    onChangeSettings,
+    onSaveScore,
+    onSaveFault,
+    databaseSnapshot,
+    onApplyDatabaseSnapshot,
+    onLogout
+  } = props;
+  const L = (zh: string, en: string) => `${zh} · ${en}`;
+  const chineseNameLabel = L('华文名字', 'Chinese name');
+  const englishNameLabel = L('英文名字', 'English name');
+  const roundStatusLabel = (status: Competition['rounds'][number]['status']) => ({
+    Draft: L('草稿', 'Draft'),
+    Active: L('进行中', 'Active'),
+    Completed: L('已完成', 'Completed')
+  })[status];
+  const judgeRoleLabel = (role: Judge['role']) => role === 'Scoring'
+    ? L('评分裁判', 'Scoring judge')
+    : L('技术裁判', 'Technical judge');
+  const [unlocked, setUnlocked] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>(admins.length ? 'login' : 'register');
+  const [adminName, setAdminName] = useState(admins[0]?.name ?? '');
+  const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
-  const [adminCount, setAdminCount] = useState(1); // Standard limitation is max 2 admins registered
-
-  // CRUD Forms State
-  const [editingAthlete, setEditingAthlete] = useState<Athlete | null>(null);
-  const [newAthlete, setNewAthlete] = useState<Partial<Athlete>>({
-    name: '', school: '', age: 16, gender: 'Male', country: 'Taiwan', teamName: ''
-  });
-
-  const [editingComp, setEditingComp] = useState<Competition | null>(null);
-  const [newComp, setNewComp] = useState<Partial<Competition>>({
-    id: '', name: '', type: 'Individual Stage', region: 'Taiwan', division: '', status: 'Draft'
-  });
-
-  const [newJudge, setNewJudge] = useState<Partial<Judge>>({
-    id: '', name: '', role: 'Scoring'
-  });
-
-  const [newEvent, setNewEvent] = useState<Partial<EventConfig>>({
-    id: '', name: '', poster: '', backgroundTheme: 'Ember'
-  });
-
-  // Manual code paste sync
-  const [manualSyncString, setManualSyncString] = useState('');
-  const [syncStatus, setSyncStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
-
-  // Set default competition on load
-  useEffect(() => {
-    if (competitions.length > 0 && !selectedCompId) {
-      setSelectedCompId(competitions[0].id);
-    }
-  }, [competitions, selectedCompId]);
-
-  // Handle password login verification
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (passwordInput === 'mdiabolo') {
-      setIsLocked(false);
-      setAuthError('');
-    } else {
-      setAuthError('Unauthorized: Access Decryption Failure. Use "mdiabolo" to login.');
-    }
-  };
-
-  const activeComp = competitions.find(c => c.id === selectedCompId) || competitions[0];
-
-  // Scoring Judges list
-  const scoringJudgesList = judges.filter(j => j.role === 'Scoring');
-
-  // Compute ranking rows using the Place Method utility
-  const rankingRows = activeComp 
-    ? calculatePlaceMethodRankings(activeComp, athletes, scores, faults, scoringJudgesList) 
+  const [tab, setTab] = useState<AdminTab>('rounds');
+  const [eventId, setEventId] = useState(events[0]?.id ?? '');
+  const eventCompetitions = competitions.filter(item => item.eventId === eventId);
+  const [competitionId, setCompetitionId] = useState(eventCompetitions[0]?.id ?? '');
+  const competition = eventCompetitions.find(item => item.id === competitionId) ?? eventCompetitions[0];
+  const [roundId, setRoundId] = useState(competition?.rounds[0]?.id ?? '');
+  const round = competition?.rounds.find(item => item.id === roundId) ?? competition?.rounds[0];
+  const scoringJudges = judges.filter(item =>
+    item.role === 'Scoring' && item.competitionIds.includes(competition?.id ?? '')
+  );
+  const rankings = competition && round
+    ? calculatePlaceMethodRankings(competition, round.id, athletes, scores, faults, scoringJudges)
     : [];
+  const [syncText, setSyncText] = useState('');
+  const [notice, setNotice] = useState('');
+  const [newAthleteName, setNewAthleteName] = useState('');
+  const [newAthleteNameEn, setNewAthleteNameEn] = useState('');
+  const [newRoundName, setNewRoundName] = useState('');
+  const [newRoundNameEn, setNewRoundNameEn] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [databaseText, setDatabaseText] = useState('');
+  const [peopleSearch, setPeopleSearch] = useState('');
+  const [newJudgeName, setNewJudgeName] = useState('');
+  const [newJudgeNameEn, setNewJudgeNameEn] = useState('');
+  const [newJudgeRole, setNewJudgeRole] = useState<Judge['role']>('Scoring');
+  const [newCompetitionName, setNewCompetitionName] = useState('');
+  const [newCompetitionNameEn, setNewCompetitionNameEn] = useState('');
+  const [newEventName, setNewEventName] = useState('');
+  const [newEventNameEn, setNewEventNameEn] = useState('');
+  const [athleteToAssign, setAthleteToAssign] = useState('');
+  const [judgeToAssign, setJudgeToAssign] = useState('');
+  
+  // Background customization states
+  const [bgPreview, setBgPreview] = useState<BackgroundConfig | null>(null);
+  const [bgType, setBgType] = useState<'gradient' | 'image' | 'video'>('gradient');
+  const [bgValue, setBgValue] = useState('');
+  const [bgOpacity, setBgOpacity] = useState(100); // Changed to 0-100 scale
+  const [showBgPreview, setShowBgPreview] = useState(false);
+  const competitionAthletes = athletes.filter(item => item.competitionIds.includes(competition?.id ?? ''));
+  const competitionJudges = judges.filter(item => item.competitionIds.includes(competition?.id ?? ''));
+  const availableAthletes = athletes.filter(item => !item.competitionIds.includes(competition?.id ?? ''));
+  const availableJudges = judges.filter(item => !item.competitionIds.includes(competition?.id ?? ''));
 
-  // ATHLETES CRUD
-  const handleSaveAthlete = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (editingAthlete) {
-      const updated = athletes.map(a => a.id === editingAthlete.id ? editingAthlete : a);
-      onUpdateAthletes(updated);
-      setEditingAthlete(null);
-    } else {
-      if (!newAthlete.name) return;
-      const nextOrder = athletes.length > 0 ? Math.max(...athletes.map(a => a.order)) + 1 : 1;
-      const created: Athlete = {
-        id: `ATH-${Math.floor(1000 + Math.random() * 9000)}`,
-        order: nextOrder,
-        name: newAthlete.name,
-        school: newAthlete.school || 'Independent',
-        age: Number(newAthlete.age) || 16,
-        gender: (newAthlete.gender as any) || 'Male',
-        country: newAthlete.country || 'Taiwan',
-        teamName: newAthlete.teamName || null
-      };
-      onUpdateAthletes([...athletes, created]);
-      setNewAthlete({ name: '', school: '', age: 16, gender: 'Male', country: 'Taiwan', teamName: '' });
+  useEffect(() => {
+    if (!eventCompetitions.some(item => item.id === competitionId)) {
+      const first = eventCompetitions[0];
+      setCompetitionId(first?.id ?? '');
+      setRoundId(first?.rounds[0]?.id ?? '');
     }
-  };
+  }, [competitionId, eventCompetitions]);
 
-  const handleDeleteAthlete = (id: string) => {
-    onUpdateAthletes(athletes.filter(a => a.id !== id));
-  };
+  const localCount = useMemo(
+    () => scores.filter(item => item.syncStatus !== 'synced').length + faults.filter(item => item.syncStatus !== 'synced').length,
+    [faults, scores]
+  );
 
-  // COMPETITIONS CRUD
-  const handleSaveComp = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (editingComp) {
-      const updated = competitions.map(c => c.id === editingComp.id ? editingComp : c);
-      onUpdateCompetitions(updated);
-      setEditingComp(null);
-    } else {
-      if (!newComp.id || !newComp.name) return;
-      const created: Competition = {
-        id: newComp.id.toUpperCase().replace(/\s+/g, '-'),
-        name: newComp.name,
-        type: (newComp.type as any) || 'Individual Stage',
-        region: newComp.region || 'Taiwan',
-        division: newComp.division || 'Open Division',
-        status: (newComp.status as any) || 'Draft'
-      };
-      onUpdateCompetitions([...competitions, created]);
-      setNewComp({ id: '', name: '', type: 'Individual Stage', region: 'Taiwan', division: '', status: 'Draft' });
+  const authenticate = async (event: FormEvent) => {
+    event.preventDefault();
+    setAuthError('');
+    if (password.length < 6) {
+      setAuthError(L('密码至少需要 6 个字符。', 'Password must contain at least 6 characters.'));
+      return;
     }
+    if (authMode === 'register') {
+      if (!adminName.trim()) {
+        setAuthError(L('请输入管理员姓名。', 'Enter the administrator name.'));
+        return;
+      }
+      if (admins.length >= 2) {
+        setAuthError(L('本设备最多注册两个管理员。', 'This device supports at most two administrators.'));
+        return;
+      }
+      const account = await createAdminAccount(adminName, password);
+      onChangeAdmins([...admins, account]);
+      setUnlocked(true);
+      setPassword('');
+      return;
+    }
+    const account = admins.find(item => item.name.toLowerCase() === adminName.trim().toLowerCase());
+    if (!account || !await verifyAdminPassword(account, password)) {
+      setAuthError(L('姓名或密码不正确。', 'Incorrect name or password.'));
+      return;
+    }
+    setUnlocked(true);
+    setPassword('');
   };
 
-  const handleDeleteComp = (id: string) => {
-    onUpdateCompetitions(competitions.filter(c => c.id !== id));
+  const updateCompetition = (next: Competition) => {
+    onChangeCompetitions(competitions.map(item => item.id === next.id ? next : item));
   };
 
-  // JUDGES CRUD
-  const handleSaveJudge = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newJudge.id || !newJudge.name) return;
-    const created: Judge = {
-      id: newJudge.id.toUpperCase(),
-      name: newJudge.name,
-      role: (newJudge.role as any) || 'Scoring'
+  const addRound = () => {
+    if (!competition || !newRoundName.trim() || !newRoundNameEn.trim()) {
+      setNotice(L('请同时填写回合的华文和英文名字。', 'Enter both Chinese and English round names.'));
+      return;
+    }
+    updateCompetition({
+      ...competition,
+      rounds: [...competition.rounds, {
+        id: createId('R'),
+        name: newRoundName.trim(),
+        nameZh: newRoundName.trim(),
+        nameEn: newRoundNameEn.trim() || newRoundName.trim(),
+        sequence: competition.rounds.length + 1,
+        status: 'Draft',
+        athleteIds: [],
+        advancingCount: null
+      }]
+    });
+    setNewRoundName('');
+    setNewRoundNameEn('');
+  };
+
+  const toggleEntrant = (athleteId: string) => {
+    if (!competition || !round) return;
+    const athleteIds = round.athleteIds.includes(athleteId)
+      ? round.athleteIds.filter(id => id !== athleteId)
+      : [...round.athleteIds, athleteId];
+    updateCompetition({
+      ...competition,
+      rounds: competition.rounds.map(item => item.id === round.id ? { ...item, athleteIds } : item)
+    });
+  };
+
+  const advanceTop = () => {
+    if (!competition || !round) return;
+    const nextRound = [...competition.rounds]
+      .sort((a, b) => a.sequence - b.sequence)
+      .find(item => item.sequence > round.sequence);
+    if (!nextRound) {
+      setNotice(L('请先建立下一回合。', 'Create the next round first.'));
+      return;
+    }
+    const count = round.advancingCount ?? rankings.length;
+    const qualified = rankings.filter(item => item.complete).slice(0, count).map(item => item.athlete.id);
+    if (!qualified.length) {
+      setNotice(L('所有评分裁判完成评分后才能晋级。', 'All scoring judges must finish before advancing athletes.'));
+      return;
+    }
+    updateCompetition({
+      ...competition,
+      rounds: competition.rounds.map(item => {
+        if (item.id === round.id) return { ...item, status: 'Completed' };
+        if (item.id === nextRound.id) return { ...item, status: 'Active', athleteIds: qualified };
+        return item;
+      })
+    });
+    setRoundId(nextRound.id);
+    setNotice(L(`${qualified.length} 名运动员已晋级 ${localizedName(nextRound, language)}。`, `${qualified.length} athletes advanced to ${localizedName(nextRound, language)}.`));
+  };
+
+  const addAthlete = () => {
+    if (!newAthleteName.trim() || !newAthleteNameEn.trim()) {
+      setNotice(L('请同时填写运动员的华文和英文名字。', 'Enter both Chinese and English athlete names.'));
+      return;
+    }
+    const nextOrder = Math.max(0, ...athletes.map(item => item.order)) + 1;
+    onChangeAthletes([...athletes, {
+      id: createId('ATH'),
+      order: nextOrder,
+      name: newAthleteName.trim(),
+      nameZh: newAthleteName.trim(),
+      nameEn: newAthleteNameEn.trim() || newAthleteName.trim(),
+      school: 'Independent',
+      age: 16,
+      gender: 'Male',
+      country: 'Taiwan',
+      teamName: null,
+      competitionIds: competition ? [competition.id] : []
+    }]);
+    setNewAthleteName('');
+    setNewAthleteNameEn('');
+  };
+
+  const addJudge = () => {
+    if (!newJudgeName.trim() || !newJudgeNameEn.trim() || !competition) {
+      setNotice(L('请同时填写裁判的华文和英文名字。', 'Enter both Chinese and English judge names.'));
+      return;
+    }
+    onChangeJudges([...judges, {
+      id: createId('J'),
+      name: newJudgeName.trim(),
+      nameZh: newJudgeName.trim(),
+      nameEn: newJudgeNameEn.trim() || newJudgeName.trim(),
+      role: newJudgeRole,
+      competitionIds: [competition.id]
+    }]);
+    setNewJudgeName('');
+    setNewJudgeNameEn('');
+  };
+
+  const assignExistingAthlete = () => {
+    if (!competition || !athleteToAssign) return;
+    onChangeAthletes(athletes.map(item => item.id === athleteToAssign
+      ? { ...item, competitionIds: [...item.competitionIds, competition.id] }
+      : item));
+    setAthleteToAssign('');
+  };
+
+  const assignExistingJudge = () => {
+    if (!competition || !judgeToAssign) return;
+    onChangeJudges(judges.map(item => item.id === judgeToAssign
+      ? { ...item, competitionIds: [...item.competitionIds, competition.id] }
+      : item));
+    setJudgeToAssign('');
+  };
+
+  const addCompetition = () => {
+    if (!newCompetitionName.trim() || !newCompetitionNameEn.trim()) {
+      setNotice(L('请同时填写比赛的华文和英文名字。', 'Enter both Chinese and English competition names.'));
+      return;
+    }
+    const id = createId('COMP');
+    const created: Competition = {
+      id,
+      eventId: eventId || events[0]?.id || 'E-01',
+      name: newCompetitionName.trim(),
+      nameZh: newCompetitionName.trim(),
+      nameEn: newCompetitionNameEn.trim() || newCompetitionName.trim(),
+      type: 'Individual Stage',
+      region: 'Taiwan',
+      division: 'Open',
+      status: 'Draft',
+      faultDeduction: 0.5,
+      rounds: [{ id: createId('R'), name: '预赛', nameZh: '预赛', nameEn: 'Qualifier', sequence: 1, status: 'Draft', athleteIds: [], advancingCount: null }]
     };
-    onUpdateJudges([...judges, created]);
-    setNewJudge({ id: '', name: '', role: 'Scoring' });
+    onChangeCompetitions([...competitions, created]);
+    setCompetitionId(id);
+    setRoundId(created.rounds[0].id);
+    setNewCompetitionName('');
+    setNewCompetitionNameEn('');
   };
 
-  const handleDeleteJudge = (id: string) => {
-    onUpdateJudges(judges.filter(j => j.id !== id));
+  const addEvent = () => {
+    if (!newEventName.trim() || !newEventNameEn.trim()) {
+      setNotice(L('请同时填写赛事的华文和英文名字。', 'Enter both Chinese and English event names.'));
+      return;
+    }
+    const id = createId('E');
+    onChangeEvents([...events, {
+      id,
+      name: newEventName.trim(),
+      nameZh: newEventName.trim(),
+      nameEn: newEventNameEn.trim() || newEventName.trim(),
+      poster: '',
+      backgroundTheme: 'Ember'
+    }]);
+    setEventId(id);
+    setCompetitionId('');
+    setRoundId('');
+    setNewEventName('');
+    setNewEventNameEn('');
   };
 
-  // EVENTS CRUD
-  const handleSaveEvent = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newEvent.id || !newEvent.name) return;
-    const created: EventConfig = {
-      id: newEvent.id.toUpperCase(),
-      name: newEvent.name,
-      poster: newEvent.poster || 'https://images.unsplash.com/photo-1564981797816-1043664bf78d?q=80&w=400',
-      backgroundTheme: newEvent.backgroundTheme || 'Ember'
-    };
-    onUpdateEvents([...events, created]);
-    setNewEvent({ id: '', name: '', poster: '', backgroundTheme: 'Ember' });
-  };
-
-  const handleDeleteEvent = (id: string) => {
-    onUpdateEvents(events.filter(e => e.id !== id));
-  };
-
-  // MOCK DATA GENERATOR & QR IMPORT SYNC HANDLER
-  const parseAndSyncString = (syncStr: string) => {
-    const trimmed = syncStr.trim();
-    if (!trimmed) return false;
-
+  const importPayload = (payload: string) => {
     try {
-      const parts = trimmed.split('|');
-      const type = parts[0];
+      const decoded = decodeQrRecord(payload);
+      if (decoded.type === 'SCORE') onSaveScore(decoded.record);
+      else onSaveFault(decoded.record);
+      setSyncText('');
+      setNotice(L('QR 数据导入成功。', 'QR data imported successfully.'));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : L('QR 数据导入失败。', 'QR import failed.'));
+    }
+  };
 
-      if (type === 'SCORE') {
-        // Format: SCORE|comp_id|athlete_id|judge_id|judge_name|scores_joined_by_comma|total_score
-        const [_, compId, athleteId, judgeId, judgeName, scoresStr, totalScoreStr] = parts;
-        const scoresArr = scoresStr.split(',').map(Number);
-        const totalScore = Number(totalScoreStr);
+  const openDatabaseJson = () => {
+    setDatabaseText(JSON.stringify(databaseSnapshot, null, 2));
+    setNotice(L('数据库 JSON 已载入。修改后点击保存整库 JSON。', 'Database JSON loaded. Edit it, then tap Save database JSON.'));
+  };
 
-        // Map dimensions dynamically based on competition type
-        const comp = competitions.find(c => c.id === compId);
-        if (!comp) throw new Error('Competition not found in database');
-
-        const dimensions: { [key: string]: number } = {};
-        if (comp.type === 'Individual Stage') {
-          const keys = ['action_difficulty', 'stage_artistry', 'action_creativity', 'action_fluency', 'costume_styling'];
-          keys.forEach((k, idx) => dimensions[k] = scoresArr[idx] || 0);
-        } else if (comp.type === 'Duo/Team Stage') {
-          const keys = ['action_difficulty', 'stage_artistry', 'action_interaction', 'action_creativity', 'costume_styling'];
-          keys.forEach((k, idx) => dimensions[k] = scoresArr[idx] || 0);
-        } else {
-          const keys = ['action_difficulty', 'action_creativity', 'action_fluency'];
-          keys.forEach((k, idx) => dimensions[k] = scoresArr[idx] || 0);
-        }
-
-        const newSubmission: ScoreSubmission = {
-          id: `${compId}_${athleteId}_${judgeId}`,
-          competitionId: compId,
-          athleteId,
-          judgeId,
-          judgeName,
-          dimensions: dimensions as any,
-          totalScore,
-          submittedAt: new Date().toISOString()
-        };
-
-        onImportScore(newSubmission);
-        return { type: 'success' as const, msg: `Synced Judge ${judgeId} scores for Athlete ${athleteId} successfully!` };
-      } else if (type === 'FAULT') {
-        // Format: FAULT|comp_id|athlete_id|fault_count
-        const [_, compId, athleteId, faultsCountStr] = parts;
-        const faultsCount = Number(faultsCountStr);
-
-        const newFault: FaultSubmission = {
-          id: `${compId}_${athleteId}_tech`,
-          competitionId: compId,
-          athleteId,
-          faultsCount,
-          deductionAmount: faultsCount * 0.5,
-          submittedAt: new Date().toISOString()
-        };
-
-        onImportFault(newFault);
-        return { type: 'success' as const, msg: `Synced Technical Faults (${faultsCount}) for Athlete ${athleteId} successfully!` };
+  const saveDatabaseJson = () => {
+    try {
+      const parsed = JSON.parse(databaseText) as DatabaseSnapshot;
+      if (parsed.protocol !== 'mdiabolo-db-v1' ||
+          !Array.isArray(parsed.athletes) ||
+          !Array.isArray(parsed.competitions) ||
+          !Array.isArray(parsed.judges) ||
+          !Array.isArray(parsed.events) ||
+          !Array.isArray(parsed.scores) ||
+          !Array.isArray(parsed.faults) ||
+          !Array.isArray(parsed.admins) ||
+          !parsed.settings) {
+        throw new Error(L('JSON 格式不完整，不能保存。', 'JSON is incomplete and cannot be saved.'));
       }
-
-      throw new Error('Unsupported sync string protocol');
-    } catch (err: any) {
-      return { type: 'error' as const, msg: `Sync Failed: ${err.message || 'Invalid string format'}` };
+      onApplyDatabaseSnapshot(parsed);
+      setNotice(L('数据库 JSON 已保存到本机 SQLite/localStorage。', 'Database JSON saved to local SQLite/localStorage.'));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : L('数据库 JSON 保存失败。', 'Database JSON save failed.'));
     }
   };
 
-  const handleManualSyncSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const result = parseAndSyncString(manualSyncString);
-    if (result) {
-      setSyncStatus({ type: result.type, msg: result.msg });
-      if (result.type === 'success') {
-        setManualSyncString('');
+  const scanQr = async () => {
+    try {
+      const { supported } = await BarcodeScanner.isSupported();
+      if (!supported) {
+        setNotice(L('此浏览器不支持原生扫码，请使用下方粘贴导入；Capacitor App 支持相机扫码。', 'This browser does not support native scanning. Paste the QR data below; the Capacitor app supports camera scanning.'));
+        return;
       }
-    } else {
-      setSyncStatus({ type: 'error', msg: 'Sync string cannot be empty' });
+      const permission = await BarcodeScanner.requestPermissions();
+      if (permission.camera !== 'granted') {
+        setNotice(L('需要相机权限才能扫描裁判 QR。', 'Camera permission is required to scan judge QR codes.'));
+        return;
+      }
+      const { barcodes } = await BarcodeScanner.scan({ formats: [BarcodeFormat.QrCode], autoZoom: true });
+      const value = barcodes[0]?.rawValue ?? barcodes[0]?.displayValue;
+      if (!value) throw new Error(L('没有读取到 QR 数据', 'No QR data was detected'));
+      importPayload(value);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : L('扫码失败。', 'Scanning failed.'));
     }
   };
 
-  // Simulated Wireless Local Device Discovery (Instant Emulator)
-  // Generates complete scored combinations instantly so user can see rankings build
-  const runLocalEmulateSync = (judgeId: string, athleteId: string) => {
-    const comp = activeComp;
-    const athlete = athletes.find(a => a.id === athleteId);
-    const judge = judges.find(j => j.id === judgeId);
-
-    if (!comp || !athlete || !judge) return;
-
-    if (judge.role === 'Technical') {
-      const simulatedCount = Math.floor(Math.random() * 4);
-      const str = `FAULT|${comp.id}|${athlete.id}|${simulatedCount}`;
-      const result = parseAndSyncString(str);
-      if (result) setSyncStatus(result);
-    } else {
-      const difficulty = 18 + Math.random() * 11.5;
-      const artistry = 18 + Math.random() * 11.5;
-      const creativity = 18 + Math.random() * 11.5;
-      const fluency = comp.type !== 'Duo/Team Stage' ? (18 + Math.random() * 11.5) : undefined;
-      const interaction = comp.type === 'Duo/Team Stage' ? (18 + Math.random() * 11.5) : undefined;
-      const costume = comp.type !== 'Challenge' ? (5 + Math.random() * 4.5) : undefined;
-
-      const scoresList = [difficulty, artistry, interaction, creativity, fluency, costume].filter(v => v !== undefined) as number[];
-      const total = scoresList.reduce((sum, v) => sum + v, 0);
-
-      const str = `SCORE|${comp.id}|${athlete.id}|${judge.id}|${judge.name}|${scoresList.map(v => v.toFixed(1)).join(',')}|${total.toFixed(1)}`;
-      const result = parseAndSyncString(str);
-      if (result) setSyncStatus(result);
+  const syncOnline = async () => {
+    if (!online) {
+      setNotice(L('当前离线。数据仍安全保存在本机，联网后再同步。', 'Currently offline. Data remains safely stored on this device and can sync later.'));
+      return;
+    }
+    const pendingScores = scores.filter(item => item.syncStatus !== 'synced');
+    const pendingFaults = faults.filter(item => item.syncStatus !== 'synced');
+    setSyncing(true);
+    try {
+      const result = await syncCompetitionRecords(pendingScores, pendingFaults, settings);
+      pendingScores.filter(item => result.syncedScoreIds.includes(item.id)).forEach(item => onSaveScore({ ...item, syncStatus: 'synced' }));
+      pendingFaults.filter(item => result.syncedFaultIds.includes(item.id)).forEach(item => onSaveFault({ ...item, syncStatus: 'synced' }));
+      if (result.settings) onChangeSettings(result.settings);
+      setNotice(L(`同步完成：${result.syncedScoreIds.length + result.syncedFaultIds.length} 笔记录。`, `Sync complete: ${result.syncedScoreIds.length + result.syncedFaultIds.length} records.`));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : L('同步失败，数据仍安全保存在本机。', 'Sync failed. Data remains safely stored on this device.'));
+    } finally {
+      setSyncing(false);
     }
   };
 
-  if (isLocked) {
+  if (!unlocked) {
     return (
-      <div id="admin-lock-screen" className="flex-1 flex flex-col items-center justify-center bg-[#0D0D0D] p-4 text-center">
-        <div className="w-full max-w-sm bg-[#121212] border border-[#333] rounded-2xl p-8 relative overflow-hidden">
-          <div className="absolute top-0 left-0 right-0 h-1 bg-[#FF4E00]"></div>
-          
-          <div className="w-14 h-14 bg-[#FF4E00]/10 border border-[#FF4E00]/30 rounded-full flex items-center justify-center text-[#FF4E00] mx-auto mb-4">
-            <Key size={24} />
-          </div>
-
-          <h2 className="text-xl font-bold text-white tracking-tight">Admin Terminal Decryption</h2>
-          <p className="text-xs text-[#666] mt-1.5 mb-6 leading-relaxed">
-            Authentication is required to unlock tournament parameters, rankings compilation, and database configurations.
-          </p>
-
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div className="text-left">
-              <label className="text-[10px] uppercase tracking-widest text-[#666] block mb-1.5 font-mono">Terminal Passphrase</label>
-              <input
-                type="password"
-                placeholder="Enter password"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                className="w-full bg-[#161616] border border-[#333] rounded-lg px-4 py-3 text-sm text-white focus:outline-none focus:border-[#FF4E00] transition-colors"
-              />
-            </div>
-
-            {authError && (
-              <p className="text-xs text-red-400 font-mono text-left bg-red-950/20 border border-red-900/40 p-2.5 rounded">
-                {authError}
-              </p>
-            )}
-
-            <button
-              type="submit"
-              className="w-full py-3 bg-[#FF4E00] text-black font-black uppercase text-xs tracking-widest rounded-lg shadow-[0_10px_20px_rgba(255,78,0,0.15)] hover:bg-[#FF6622] transition-all"
-            >
-              Decrypt Terminal
-            </button>
+      <section className="auth-screen">
+        <div className="auth-card">
+          <div className="eyebrow">{L('管理员安全入口', 'Secure administrator access')}</div>
+          <h1>{authMode === 'register' ? L('注册本机管理员', 'Register local administrator') : L('管理员登录', 'Administrator login')}</h1>
+          <p>{L('管理员账号只保存在此设备，密码使用加盐摘要保存。最多两个账号。', 'Administrator accounts are stored on this device with salted password hashes. Maximum two accounts.')}</p>
+          <form onSubmit={authenticate} className="form-stack">
+            <label>{L('管理员姓名', 'Administrator name')}<input value={adminName} onChange={event => setAdminName(event.target.value)} autoComplete="username" /></label>
+            <label>{L('密码', 'Password')}<input type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete={authMode === 'register' ? 'new-password' : 'current-password'} /></label>
+            {authError && <div className="error-message">{authError}</div>}
+            <button className="primary-button" type="submit">{authMode === 'register' ? L('注册并进入', 'Register and enter') : L('登录', 'Log in')}</button>
           </form>
-
-          <div className="mt-6 pt-4 border-t border-[#222] text-center">
-            <span className="text-[10px] text-[#444] font-mono">PASS: mdiabolo • MAX ADMIN DEVICE CAPACITY: 2</span>
+          <div className="auth-actions">
+            {admins.length > 0 && <button className="text-button" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>
+              {authMode === 'login' ? L(`注册另一位管理员（${admins.length}/2）`, `Register another administrator (${admins.length}/2)`) : L('返回登录', 'Back to login')}
+            </button>}
+            <button className="text-button" onClick={onLogout}>{L('返回身份选择', 'Back to role selection')}</button>
           </div>
         </div>
-      </div>
+      </section>
     );
   }
 
+  const tabs: { id: AdminTab; label: string; icon: typeof Trophy }[] = [
+    { id: 'rounds', label: L('回合', 'Rounds'), icon: ChevronRight },
+    { id: 'bracket', label: L('对阵图', 'Bracket'), icon: GitBranch },
+    { id: 'ranking', label: L('排名', 'Ranking'), icon: Trophy },
+    { id: 'people', label: L('人员', 'People'), icon: Users },
+    { id: 'sync', label: L('同步', 'Sync'), icon: QrCode },
+    { id: 'settings', label: L('设置', 'Settings'), icon: Settings }
+  ];
+
   return (
-    <div id="admin-root-container" className="flex-1 flex flex-col md:flex-row h-full overflow-hidden bg-[#0D0D0D]">
-      
-      {/* SIDEBAR NAVIGATION */}
-      <aside id="admin-sidebar" className="w-full md:w-[240px] bg-[#121212] border-b md:border-b-0 md:border-r border-[#222] p-4 md:p-5 shrink-0 flex flex-col overflow-y-auto">
-        {/* Title block - hidden on small mobile screen, visible on tablet (md) */}
-        <div className="hidden md:block mb-6 pb-4 border-b border-[#222]">
-          <span className="text-[9px] uppercase tracking-[0.2em] text-[#FF4E00] font-mono leading-none">ROOT ACCESS</span>
-          <h2 className="text-lg font-bold text-white mt-1">Admin Dashboard</h2>
-          <span className="text-[10px] text-green-400 font-mono flex items-center gap-1 mt-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span> Terminal Authenticated
-          </span>
-        </div>
+    <section className="admin-workspace">
+      <div className="section-heading">
+        <div><div className="eyebrow">{L('管理员', 'Administrator')}</div><h1>{L('比赛控制台', 'Competition console')}</h1></div>
+        <button className="text-button" onClick={onLogout}><ArrowLeft size={16} />{L('退出', 'Exit')}</button>
+      </div>
 
-        {/* Mobile Header block - only on small screens */}
-        <div className="flex md:hidden justify-between items-center mb-3">
-          <div>
-            <span className="text-[8px] uppercase tracking-widest text-[#FF4E00] font-mono">ADMIN SYSTEM</span>
-            <h2 className="text-base font-bold text-white leading-tight">Control Panel</h2>
+      <div className="control-grid admin-filters">
+        <label>{L('赛事', 'Event')}<select value={eventId} onChange={event => setEventId(event.target.value)}>
+          {events.map(item => <option key={item.id} value={item.id}>{localizedName(item, language)}</option>)}
+        </select></label>
+        <label>{L('比赛', 'Competition')}<select value={competition?.id ?? ''} onChange={event => {
+          setCompetitionId(event.target.value);
+          const next = eventCompetitions.find(item => item.id === event.target.value);
+          setRoundId(next?.rounds[0]?.id ?? '');
+        }}>{eventCompetitions.map(item => <option key={item.id} value={item.id}>{localizedName(item, language)}</option>)}</select></label>
+        <label>{L('回合', 'Round')}<select value={round?.id ?? ''} onChange={event => setRoundId(event.target.value)}>
+          {competition && [...competition.rounds].sort((a, b) => a.sequence - b.sequence).map(item => <option key={item.id} value={item.id}>{localizedName(item, language)}</option>)}
+        </select></label>
+      </div>
+
+      <nav className="tab-bar" aria-label={L('管理员功能', 'Administrator functions')}>
+        {tabs.map(item => {
+          const Icon = item.icon;
+          return <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><Icon size={18} /><span>{item.label}</span></button>;
+        })}
+      </nav>
+
+      {notice && <button className="notice" onClick={() => setNotice('')}>{notice}<span>×</span></button>}
+
+      {tab === 'rounds' && competition && round && (
+        <div className="panel-stack">
+          <div className="round-flow" aria-label={L('比赛回合流程', 'Competition round flow')}>
+            {[...competition.rounds].sort((a, b) => a.sequence - b.sequence).map((item, index) => (
+              <div className={`round-node ${item.id === round.id ? 'selected' : ''}`} key={item.id}>
+                <button onClick={() => setRoundId(item.id)}>
+                  <span>{item.sequence}</span><strong>{localizedName(item, language)}</strong><small>{item.athleteIds.length} {L('人', 'athletes')} · {roundStatusLabel(item.status)}</small>
+                </button>
+                {index < competition.rounds.length - 1 && <ChevronRight aria-hidden="true" />}
+              </div>
+            ))}
           </div>
-          <button
-            onClick={() => setIsLocked(true)}
-            className="px-3 py-1 bg-red-950/20 text-red-400 hover:text-red-300 border border-red-900/40 rounded text-[9px] uppercase font-mono font-bold tracking-widest active:scale-95 transition-all"
-          >
-            Lock
-          </button>
-        </div>
-
-        <nav className="flex flex-row md:flex-col overflow-x-auto md:overflow-visible gap-1 md:gap-2 pb-2 md:pb-0 scrollbar-none shrink-0">
-          <button
-            onClick={() => setActiveTab('rankings')}
-            className={`px-3.5 md:px-4 py-2 md:py-2.5 rounded-lg flex items-center gap-2 text-[10px] md:text-xs uppercase tracking-wider font-bold transition-all shrink-0 ${
-              activeTab === 'rankings' ? 'bg-[#1D1614] text-[#FF4E00] border-b-2 md:border-b-0 md:border-l-2 border-[#FF4E00]' : 'text-[#888] hover:bg-[#1A1A1A] hover:text-[#CCC]'
-            }`}
-          >
-            <Award size={13} /> Rankings
-          </button>
-          <button
-            onClick={() => setActiveTab('sync')}
-            className={`px-3.5 md:px-4 py-2 md:py-2.5 rounded-lg flex items-center gap-2 text-[10px] md:text-xs uppercase tracking-wider font-bold transition-all shrink-0 ${
-              activeTab === 'sync' ? 'bg-[#1D1614] text-[#FF4E00] border-b-2 md:border-b-0 md:border-l-2 border-[#FF4E00]' : 'text-[#888] hover:bg-[#1A1A1A] hover:text-[#CCC]'
-            }`}
-          >
-            <QrCode size={13} /> Sync Data
-          </button>
-          <button
-            onClick={() => setActiveTab('athletes')}
-            className={`px-3.5 md:px-4 py-2 md:py-2.5 rounded-lg flex items-center gap-2 text-[10px] md:text-xs uppercase tracking-wider font-bold transition-all shrink-0 ${
-              activeTab === 'athletes' ? 'bg-[#1D1614] text-[#FF4E00] border-b-2 md:border-b-0 md:border-l-2 border-[#FF4E00]' : 'text-[#888] hover:bg-[#1A1A1A] hover:text-[#CCC]'
-            }`}
-          >
-            <Users size={13} /> Athletes
-          </button>
-          <button
-            onClick={() => setActiveTab('competitions')}
-            className={`px-3.5 md:px-4 py-2 md:py-2.5 rounded-lg flex items-center gap-2 text-[10px] md:text-xs uppercase tracking-wider font-bold transition-all shrink-0 ${
-              activeTab === 'competitions' ? 'bg-[#1D1614] text-[#FF4E00] border-b-2 md:border-b-0 md:border-l-2 border-[#FF4E00]' : 'text-[#888] hover:bg-[#1A1A1A] hover:text-[#CCC]'
-            }`}
-          >
-            <Database size={13} /> Contests
-          </button>
-          <button
-            onClick={() => setActiveTab('judges')}
-            className={`px-3.5 md:px-4 py-2 md:py-2.5 rounded-lg flex items-center gap-2 text-[10px] md:text-xs uppercase tracking-wider font-bold transition-all shrink-0 ${
-              activeTab === 'judges' ? 'bg-[#1D1614] text-[#FF4E00] border-b-2 md:border-b-0 md:border-l-2 border-[#FF4E00]' : 'text-[#888] hover:bg-[#1A1A1A] hover:text-[#CCC]'
-            }`}
-          >
-            <Sliders size={13} /> Judges
-          </button>
-          <button
-            onClick={() => setActiveTab('events')}
-            className={`px-3.5 md:px-4 py-2 md:py-2.5 rounded-lg flex items-center gap-2 text-[10px] md:text-xs uppercase tracking-wider font-bold transition-all shrink-0 ${
-              activeTab === 'events' ? 'bg-[#1D1614] text-[#FF4E00] border-b-2 md:border-b-0 md:border-l-2 border-[#FF4E00]' : 'text-[#888] hover:bg-[#1A1A1A] hover:text-[#CCC]'
-            }`}
-          >
-            <Settings size={13} /> Events
-          </button>
-        </nav>
-
-        <div className="hidden md:block pt-4 border-t border-[#222] mt-auto">
-          <button
-            onClick={() => setIsLocked(true)}
-            className="w-full py-2 bg-[#222] hover:bg-red-950/20 hover:text-red-400 hover:border-red-900/30 border border-[#333] rounded-lg text-[10px] uppercase tracking-widest font-bold text-[#999] transition-colors"
-          >
-            Lock Dashboard
-          </button>
-        </div>
-      </aside>
-
-      {/* MAIN VIEW AREA */}
-      <main id="admin-main-view" className="flex-1 p-6 md:p-8 overflow-y-auto flex flex-col gap-6">
-
-        {/* TAB 1: RANKINGS & PLACE METHOD */}
-        {activeTab === 'rankings' && (
-          <div className="space-y-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-[#222] pb-4">
-              <div>
-                <span className="text-[10px] uppercase tracking-[0.2em] text-[#FF4E00] font-mono">OFFLINE RANKING SYSTEMS</span>
-                <h1 className="text-2xl font-bold tracking-tight text-white">Place Method Matrix (席次法評分盤)</h1>
-              </div>
-              
-              <div className="flex items-center gap-3">
-                <label className="text-xs text-[#999] font-mono">Competition Select:</label>
-                <select
-                  value={selectedCompId}
-                  onChange={(e) => setSelectedCompId(e.target.value)}
-                  className="bg-[#161616] border border-[#333] text-sm text-white rounded-lg px-3 py-1.5 focus:outline-none focus:border-[#FF4E00] font-mono"
-                >
-                  {competitions.map(c => (
-                    <option key={c.id} value={c.id}>{c.id} ({c.type})</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-             {/* Desktop & Tablet Standings Grid (Place Method) */}
-             <div className="hidden md:block bg-[#121212] border border-[#222] rounded-xl overflow-x-auto">
-               <div className="p-4 bg-[#161616] border-b border-[#222] flex justify-between items-center">
-                 <div className="flex gap-4 text-xs font-mono text-[#666]">
-                   <span>COMP: {activeComp?.name}</span>
-                   <span>|</span>
-                   <span>TYPE: <span className="text-[#FF4E00] font-bold">{activeComp?.type}</span></span>
-                 </div>
-                 <div className="text-[10px] text-green-400 font-mono bg-green-500/5 px-2.5 py-1 rounded border border-green-500/10">
-                   Calculated automatically via Offline Rank Engine
-                 </div>
-               </div>
-
-               <table className="w-full text-left border-collapse">
-                 <thead>
-                   <tr className="border-b border-[#222] bg-[#161616] text-[10px] uppercase tracking-widest text-[#666] font-mono">
-                     <th className="p-4">Final Rank</th>
-                     <th className="p-4">Order / ID</th>
-                     <th className="p-4">Athlete / School</th>
-                     {scoringJudgesList.map(judge => (
-                       <th key={judge.id} className="p-4 text-center">{judge.name.split(' ')[0]} Place</th>
-                     ))}
-                     <th className="p-4 text-center">Technical Faults (Deduction)</th>
-                     <th className="p-4 text-center text-[#FF4E00] font-bold">Total Places (席次和)</th>
-                     <th className="p-4 text-center">Total Score (分和)</th>
-                   </tr>
-                 </thead>
-                 <tbody className="divide-y divide-[#222] text-sm text-[#CCC]">
-                   {rankingRows.map(row => (
-                     <tr key={row.athlete.id} className="hover:bg-[#161616]/50 transition-colors">
-                       <td className="p-4 font-mono font-black text-lg">
-                         {row.finalRank === 1 ? (
-                           <span className="text-yellow-500 font-bold flex items-center gap-1">🥇 1st</span>
-                         ) : row.finalRank === 2 ? (
-                           <span className="text-gray-400 font-bold flex items-center gap-1">🥈 2nd</span>
-                         ) : row.finalRank === 3 ? (
-                           <span className="text-amber-600 font-bold flex items-center gap-1">🥉 3rd</span>
-                         ) : (
-                           <span className="text-[#999]">{row.finalRank}th</span>
-                         )}
-                       </td>
-                       <td className="p-4 font-mono text-xs">
-                         <span className="text-[#666]">#{row.athlete.order}</span>
-                         <span className="block text-[#444]">{row.athlete.id}</span>
-                       </td>
-                       <td className="p-4">
-                         <p className="font-bold text-white">{row.athlete.name}</p>
-                         <p className="text-xs text-[#666]">{row.athlete.school} ({row.athlete.country})</p>
-                       </td>
-                       
-                       {/* Individual Judges placements */}
-                       {scoringJudgesList.map(judge => {
-                         const jData = row.scoresByJudge[judge.id];
-                         return (
-                           <td key={judge.id} className="p-4 text-center font-mono">
-                             {jData ? (
-                               <div>
-                                 <span className="font-bold text-white">{jData.score.toFixed(1)}</span>
-                                 <span className="block text-[10px] text-[#FF4E00]">Rank: {jData.rank}</span>
-                               </div>
-                             ) : (
-                               <span className="text-[#444]">-</span>
-                             )}
-                           </td>
-                         );
-                       })}
-
-                       {/* Technical Faults deduction info */}
-                       <td className="p-4 text-center font-mono">
-                         <span className="text-white font-bold">{row.faultsCount} faults</span>
-                         <span className="block text-[10px] text-red-400">-{row.deduction.toFixed(1)} pts</span>
-                       </td>
-
-                       {/* Total Places (席次和) */}
-                       <td className="p-4 text-center font-mono text-base font-black text-white bg-[#1D1614]">
-                         {row.totalPlaces.toFixed(1)}
-                       </td>
-
-                       {/* Total Score */}
-                       <td className="p-4 text-center font-mono text-xs text-[#888]">
-                         {row.totalScore.toFixed(1)} pts
-                       </td>
-                     </tr>
-                   ))}
-
-                   {rankingRows.length === 0 && (
-                     <tr>
-                       <td colSpan={5 + scoringJudgesList.length} className="p-8 text-center text-[#555] font-mono">
-                         No participating athletes registered in this competition yet.
-                       </td>
-                     </tr>
-                   )}
-                 </tbody>
-               </table>
-             </div>
-
-             {/* Smartphone Standing Cards (Place Method) */}
-             <div className="block md:hidden space-y-3">
-               <div className="p-3 bg-[#161616] border border-[#222] rounded-xl flex justify-between items-center text-xs font-mono text-[#888]">
-                 <span>COMP: {activeComp?.name}</span>
-                 <span className="text-[10px] text-green-400 font-mono bg-green-500/5 px-2 py-0.5 rounded border border-green-500/10">
-                   Auto Calculated
-                 </span>
-               </div>
-
-               {rankingRows.map(row => {
-                 const isExpanded = expandedAthleteId === row.athlete.id;
-                 return (
-                   <div 
-                     key={row.athlete.id}
-                     className="bg-[#121212] border border-[#222] rounded-xl p-4 flex flex-col gap-3 transition-all"
-                   >
-                     {/* Rank Row */}
-                     <div className="flex items-center justify-between">
-                       <div className="flex items-center gap-3">
-                         <span className="text-xl font-mono font-black shrink-0">
-                           {row.finalRank === 1 ? '🥇 1st' : row.finalRank === 2 ? '🥈 2nd' : row.finalRank === 3 ? '🥉 3rd' : `${row.finalRank}th`}
-                         </span>
-                         <div className="min-w-0">
-                           <p className="font-bold text-white text-sm leading-tight truncate">{row.athlete.name}</p>
-                           <p className="text-[11px] text-[#666] truncate">#{row.athlete.order} • {row.athlete.school}</p>
-                         </div>
-                       </div>
-
-                       <div className="text-right shrink-0">
-                         <span className="text-[9px] uppercase tracking-widest text-[#666] block font-mono">PLACES (席次和)</span>
-                         <span className="text-lg font-black text-[#FF4E00] font-mono leading-none">{row.totalPlaces.toFixed(1)}</span>
-                       </div>
-                     </div>
-
-                     {/* Key Stats Row */}
-                     <div className="grid grid-cols-2 gap-2 bg-[#161616] p-2 rounded-lg text-xs border border-[#222]/50 font-mono">
-                       <div>
-                         <span className="text-[#666] block text-[9px] uppercase">TOTAL POINTS (分和)</span>
-                         <span className="text-[#CCC] font-bold">{row.totalScore.toFixed(1)} Pts</span>
-                       </div>
-                       <div>
-                         <span className="text-[#666] block text-[9px] uppercase">TECH FAULTS</span>
-                         <span className="text-red-400 font-bold">{row.faultsCount} faults (-{row.deduction.toFixed(1)})</span>
-                       </div>
-                     </div>
-
-                     {/* Expand Details Trigger */}
-                     <button
-                       onClick={() => setExpandedAthleteId(isExpanded ? null : row.athlete.id)}
-                       className="w-full py-2 bg-[#181818] hover:bg-[#222] border border-[#222] rounded-lg text-[10px] uppercase font-mono font-bold tracking-widest text-[#999] hover:text-white transition-all flex items-center justify-center gap-1 active:scale-95"
-                     >
-                       {isExpanded ? 'Hide Placements ▲' : 'Show Judge Placements ▼'}
-                     </button>
-
-                     {/* Expanded Placings Drawer */}
-                     {isExpanded && (
-                       <div className="border-t border-[#222]/80 pt-3 space-y-2 animate-fade-in">
-                         <span className="text-[9px] uppercase tracking-widest text-[#666] block font-mono mb-1">INDIVIDUAL JUDGES:</span>
-                         <div className="grid grid-cols-1 gap-1.5">
-                           {scoringJudgesList.map(judge => {
-                             const jData = row.scoresByJudge[judge.id];
-                             return (
-                               <div key={judge.id} className="flex justify-between items-center text-xs bg-[#161616] px-3 py-2 rounded border border-[#222]/40 font-mono">
-                                 <span className="text-[#888]">{judge.name}</span>
-                                 <div className="text-right flex items-center gap-2">
-                                   <span className="text-[#AAA]">{jData ? `${jData.score.toFixed(1)} Pts` : '-'}</span>
-                                   <span className="px-2 py-0.5 bg-[#FF4E00]/10 text-[#FF4E00] rounded text-[10px] font-bold border border-[#FF4E00]/20">
-                                     Rank: {jData ? jData.rank : '-'}
-                                   </span>
-                                 </div>
-                               </div>
-                             );
-                           })}
-                         </div>
-                       </div>
-                     )}
-                   </div>
-                 );
-               })}
-
-               {rankingRows.length === 0 && (
-                 <div className="p-8 text-center text-[#555] font-mono text-xs bg-[#121212] border border-[#222] rounded-xl">
-                   No participating athletes registered in this competition yet.
-                 </div>
-               )}
-             </div>
-
-            {/* Explanatory box on the Place Method */}
-            <div className="p-5 bg-[#161616] border border-[#222] rounded-xl flex items-start gap-4">
-              <AlertCircle className="text-[#FF4E00] shrink-0 mt-0.5" size={18} />
-              <div className="text-xs leading-relaxed text-[#888]">
-                <h4 className="font-bold text-white mb-1">About the Place Method (席次法說明)</h4>
-                <p className="mb-2">
-                  1. Each individual scoring judge scores athletes independently on active dimensions.
-                </p>
-                <p className="mb-2">
-                  2. For each judge, athletes are ranked descending from 1 to N. Tie scores are averaged (e.g., sharing 1st & 2nd place yields rank 1.5).
-                </p>
-                <p className="mb-2">
-                  3. The **Total Places (席次和)** is the sum of ranks from all judges. The athlete with the **lowest** Total Places is ranked 1st overall.
-                </p>
-                <p>
-                  4. **Tiebreakers**: 1st Tiebreaker: Highest Total Score sum. 2nd Tiebreaker: Least recorded technical faults.
-                </p>
-              </div>
+          <div className="card">
+            <h2>{L('回合详细设置', 'Round Details')}</h2>
+            <div className="field-pair">
+              <label>{L('比赛时间', 'Start Time')}<input type="time" value={round.startTime || ''} onChange={event => updateCompetition({
+                ...competition,
+                rounds: competition.rounds.map(item => item.id === round.id ? { ...item, startTime: event.target.value } : item)
+              })} /></label>
+              <label>{L('公告时间', 'Announcement Time')}<input type="time" value={round.announcementTime || ''} onChange={event => updateCompetition({
+                ...competition,
+                rounds: competition.rounds.map(item => item.id === round.id ? { ...item, announcementTime: event.target.value } : item)
+              })} /></label>
             </div>
           </div>
-        )}
-
-        {/* TAB 2: DATA SYNC & TRANSFER */}
-        {activeTab === 'sync' && (
-          <div className="space-y-6">
-            <div className="border-b border-[#222] pb-4">
-              <span className="text-[10px] uppercase tracking-[0.2em] text-[#FF4E00] font-mono">OFFLINE DATA INTEGRITY</span>
-              <h1 className="text-2xl font-bold tracking-tight text-white">QR Sync & Data Center (數據同步中心)</h1>
+          <div className="card">
+            <div className="card-heading"><div><h2>{localizedName(round, language)} {L('参赛名单', 'entries')}</h2><p>{L('点选运动员加入或移出本回合。', 'Select athletes to add or remove them from this round.')}</p></div><span className="tag">{round.athleteIds.length} {L('人', 'athletes')}</span></div>
+            <div className="check-grid">
+              {competitionAthletes.map(athlete => {
+                const selected = round.athleteIds.includes(athlete.id);
+                return <button key={athlete.id} className={selected ? 'selected' : ''} onClick={() => toggleEntrant(athlete.id)}>
+                  <span>{athlete.order}. {localizedName(athlete, language)}</span>{selected && <Check size={17} />}
+                </button>;
+              })}
             </div>
+            <div className="inline-form">
+              <label>{L('晋级人数', 'Number advancing')}<input type="number" min="1" value={round.advancingCount ?? ''} onChange={event => updateCompetition({
+                ...competition,
+                rounds: competition.rounds.map(item => item.id === round.id ? { ...item, advancingCount: Number(event.target.value) || null } : item)
+              })} /></label>
+              <button className="secondary-button" onClick={advanceTop}>{L('按排名晋级下一轮', 'Advance by ranking')}</button>
+            </div>
+          </div>
+          <div className="card">
+            <h2>{L('新增回合', 'Add round')}</h2>
+            <div className="bilingual-form"><input placeholder={L('华文回合名字，例如：半决赛', 'Chinese round name')} value={newRoundName} onChange={event => setNewRoundName(event.target.value)} /><input placeholder={L('英文回合名字，例如：Semi-final', 'English round name, e.g. Semi-final')} value={newRoundNameEn} onChange={event => setNewRoundNameEn(event.target.value)} /><button className="secondary-button" onClick={addRound}><Plus size={17} />{L('新增', 'Add')}</button></div>
+          </div>
+        </div>
+      )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              
-              {/* PASTE COMPONENT */}
-              <div className="p-6 bg-[#121212] border border-[#222] rounded-xl flex flex-col gap-4">
-                <div>
-                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">Paste Score / Fault Sync Code</h3>
-                  <p className="text-xs text-[#666] mt-1">Paste the backup text sync code copied from any Judge's device screen to import scores instantly.</p>
-                </div>
-
-                <form onSubmit={handleManualSyncSubmit} className="space-y-4">
-                  <textarea
-                    rows={4}
-                    placeholder="e.g. SCORE|INTL-2026-IND|ATH-0821|J-01|Marcus Wong|26.5,24.0,25.5,23.0,8.5|107.5"
-                    value={manualSyncString}
-                    onChange={(e) => setManualSyncString(e.target.value)}
-                    className="w-full bg-[#161616] border border-[#333] rounded-lg p-3 text-xs text-[#CCC] font-mono focus:outline-none focus:border-[#FF4E00]"
-                  />
-
-                  {syncStatus && (
-                    <div className={`p-3 rounded text-xs font-mono border ${
-                      syncStatus.type === 'success' 
-                        ? 'bg-green-950/20 text-green-400 border-green-500/20' 
-                        : 'bg-red-950/20 text-red-400 border-red-500/20'
-                    }`}>
-                      {syncStatus.msg}
-                    </div>
-                  )}
-
-                  <button
-                    type="submit"
-                    className="w-full py-2.5 bg-[#FF4E00] text-black font-black uppercase text-xs tracking-widest rounded-lg hover:bg-[#FF6622] transition-all"
-                  >
-                    Sync This Record
-                  </button>
-                </form>
-              </div>
-
-              {/* SIMULATION CONTROLLER (IMPORTANT FOR USER PLAY TESTING IN SANDBOX) */}
-              <div className="p-6 bg-[#121212] border border-[#222] rounded-xl flex flex-col gap-4">
-                <div>
-                  <h3 className="text-sm font-bold text-[#FF4E00] uppercase tracking-wider">Local Wireless Emulator</h3>
-                  <p className="text-xs text-[#666] mt-1">In an offline environment, judges scan their QR codes. For testing inside this browser window, select a target below to instantly simulate a wireless score sync!</p>
-                </div>
-
-                <div className="space-y-3">
-                  <label className="text-[10px] uppercase tracking-widest text-[#666] font-mono block">Simulate Synchronization For Athlete:</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {athletes.map(ath => (
-                      <div key={ath.id} className="p-2.5 bg-[#161616] border border-[#222] rounded-lg flex flex-col gap-2">
-                        <span className="text-xs font-bold text-white block truncate">{ath.name}</span>
-                        <div className="flex flex-col gap-1.5">
-                          {judges.map(judge => (
-                            <button
-                              key={judge.id}
-                              onClick={() => runLocalEmulateSync(judge.id, ath.id)}
-                              className="w-full py-1 bg-[#222] hover:bg-[#FF4E00]/10 border border-[#333] hover:border-[#FF4E00]/40 rounded text-[9px] font-mono text-left px-2 truncate text-[#999] hover:text-white transition-all"
-                            >
-                              Sync {judge.id} ({judge.role === 'Technical' ? 'Faults' : 'Score'})
-                            </button>
-                          ))}
-                        </div>
+      {tab === 'bracket' && competition && (
+        <div className="panel-stack">
+          <div className="status-card">
+            <span>{localizedName(events.find(item => item.id === competition.eventId), language)}</span>
+            <strong>{localizedName(competition, language)}</strong>
+          </div>
+          <div className="bracket-board" aria-label={L('淘汰赛对阵图', 'Tournament bracket')}>
+            {[...competition.rounds].sort((a, b) => a.sequence - b.sequence).map((bracketRound, roundIndex, sortedRounds) => {
+              const entrants = bracketRound.athleteIds
+                .map(id => athletes.find(item => item.id === id))
+                .filter((item): item is Athlete => Boolean(item));
+              const matches = Array.from({ length: Math.max(1, Math.ceil(entrants.length / 2)) }, (_, index) => entrants.slice(index * 2, index * 2 + 2));
+              return (
+                <section className="bracket-column" key={bracketRound.id}>
+                  <div className="bracket-round-title">
+                    <span>{bracketRound.sequence}</span>
+                    <div><strong>{localizedName(bracketRound, language)}</strong><small>{roundStatusLabel(bracketRound.status)}</small></div>
+                  </div>
+                  <div className="bracket-matches">
+                    {matches.map((match, matchIndex) => (
+                      <div className="bracket-match" key={`${bracketRound.id}-${matchIndex}`}>
+                        {[0, 1].map(slot => {
+                          const entrant = match[slot];
+                          return (
+                            <div className={entrant ? 'filled' : 'empty-slot'} key={slot}>
+                              <span>{entrant?.order ?? '—'}</span>
+                              <strong>{entrant ? localizedName(entrant, language) : L('待定', 'TBD')}</strong>
+                            </div>
+                          );
+                        })}
                       </div>
                     ))}
                   </div>
-                </div>
+                  {roundIndex < sortedRounds.length - 1 && <ChevronRight className="bracket-arrow" aria-hidden="true" />}
+                </section>
+              );
+            })}
+          </div>
+          <p className="bracket-help">{L('对阵位置按照本回合参赛名单顺序排列；完成评分后，可在“回合”页面按排名晋级并自动填入下一轮。', 'Match positions follow the round entry order. After scoring, advance athletes by ranking from the Rounds page to populate the next round.')}</p>
+        </div>
+      )}
+
+      {tab === 'ranking' && (
+        <div className="panel-stack">
+          <div className="status-card">
+            <span>{L('席次法 · 两两多数比较', 'Place method · Pairwise majority')}</span>
+            <strong>{rankings.filter(item => item.complete).length}/{rankings.length} {L('人评分完整', 'complete')}</strong>
+          </div>
+          <div className="card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h2 style={{ margin: 0 }}>{L('导出成绩表', 'Export Results')}</h2>
+              <div style={{ display: 'flex', gap: '.5rem' }}>
+                <button className="secondary-button" onClick={() => competition && round && exportRankingToExcel(competition, round, rankings, competitionJudges, scores, faults, language)}>{L('导出 Excel', 'Export Excel')}</button>
+                <button className="secondary-button" onClick={() => competition && round && exportRankingToPDF(competition, round, rankings, competitionJudges, scores, language)}>{L('导出 PDF', 'Export PDF')}</button>
               </div>
             </div>
           </div>
-        )}
-
-        {/* TAB 3: ATHLETES MANAGEMENT */}
-        {activeTab === 'athletes' && (
-          <div className="space-y-6">
-            <div className="border-b border-[#222] pb-4">
-              <span className="text-[10px] uppercase tracking-[0.2em] text-[#FF4E00] font-mono">ATHLETE DATABASE</span>
-              <h1 className="text-2xl font-bold tracking-tight text-white">Manage Competitors</h1>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              
-              {/* Athlete Form */}
-              <div className="p-6 bg-[#121212] border border-[#222] rounded-xl flex flex-col gap-4 self-start">
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
-                  {editingAthlete ? 'Edit Athlete Record' : 'Add New Athlete'}
-                </h3>
-
-                <form onSubmit={handleSaveAthlete} className="space-y-3 text-xs">
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Athlete Name</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. Chen Wei Ting"
-                      value={editingAthlete ? editingAthlete.name : newAthlete.name}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (editingAthlete) setEditingAthlete({ ...editingAthlete, name: v });
-                        else setNewAthlete({ ...newAthlete, name: v });
-                      }}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">School / Club</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Taipei Association"
-                      value={editingAthlete ? editingAthlete.school : newAthlete.school}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (editingAthlete) setEditingAthlete({ ...editingAthlete, school: v });
-                        else setNewAthlete({ ...newAthlete, school: v });
-                      }}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Age</label>
-                      <input
-                        type="number"
-                        value={editingAthlete ? editingAthlete.age : newAthlete.age}
-                        onChange={(e) => {
-                          const v = parseInt(e.target.value);
-                          if (editingAthlete) setEditingAthlete({ ...editingAthlete, age: v });
-                          else setNewAthlete({ ...newAthlete, age: v });
-                        }}
-                        className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Gender</label>
-                      <select
-                        value={editingAthlete ? editingAthlete.gender : newAthlete.gender}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (editingAthlete) setEditingAthlete({ ...editingAthlete, gender: v as any });
-                          else setNewAthlete({ ...newAthlete, gender: v as any });
-                        }}
-                        className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                      >
-                        <option value="Male">Male</option>
-                        <option value="Female">Female</option>
-                        <option value="Co-ed">Co-ed</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Country</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Taiwan"
-                        value={editingAthlete ? editingAthlete.country : newAthlete.country}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (editingAthlete) setEditingAthlete({ ...editingAthlete, country: v });
-                          else setNewAthlete({ ...newAthlete, country: v });
-                        }}
-                        className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Team Name (Optional)</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Elite Alpha"
-                        value={editingAthlete ? (editingAthlete.teamName || '') : (newAthlete.teamName || '')}
-                        onChange={(e) => {
-                          const v = e.target.value || '';
-                          if (editingAthlete) setEditingAthlete({ ...editingAthlete, teamName: v || null });
-                          else setNewAthlete({ ...newAthlete, teamName: v || null });
-                        }}
-                        className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2 pt-2">
-                    <button
-                      type="submit"
-                      className="flex-1 py-2 bg-[#FF4E00] text-black font-bold uppercase text-xs rounded hover:bg-[#FF6622]"
-                    >
-                      {editingAthlete ? 'Save Changes' : 'Register Athlete'}
-                    </button>
-                    {editingAthlete && (
-                      <button
-                        type="button"
-                        onClick={() => setEditingAthlete(null)}
-                        className="px-3 py-2 bg-[#222] text-[#999] border border-[#333] rounded uppercase text-xs hover:bg-[#333]"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                </form>
-              </div>
-
-              {/* Athletes list table */}
-              <div className="lg:col-span-2 bg-[#121212] border border-[#222] rounded-xl overflow-hidden">
-                <div className="p-4 bg-[#161616] border-b border-[#222] flex justify-between items-center">
-                  <span className="text-xs uppercase tracking-widest text-[#666] font-mono font-bold">ATHLETE DIRECTORY</span>
-                  <span className="px-2 py-0.5 bg-[#222] text-[#999] font-mono text-[10px] rounded border border-[#333]">
-                    {athletes.length} Registered Athletes
-                  </span>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-[#222] bg-[#161616]/50 text-[#666] font-mono uppercase">
-                        <th className="p-3 text-center">Order</th>
-                        <th className="p-3">ID</th>
-                        <th className="p-3">Competitor Details</th>
-                        <th className="p-3">Country / Team</th>
-                        <th className="p-3 text-center">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#222] text-[#CCC]">
-                      {athletes
-                        .sort((a, b) => a.order - b.order)
-                        .map(athlete => (
-                          <tr key={athlete.id} className="hover:bg-[#161616]/30 transition-colors">
-                            <td className="p-3 text-center font-mono font-bold text-white text-sm">{athlete.order}</td>
-                            <td className="p-3 font-mono text-[#666]">{athlete.id}</td>
-                            <td className="p-3">
-                              <p className="font-bold text-white">{athlete.name}</p>
-                              <p className="text-[#888]">{athlete.school} • {athlete.age}y.o ({athlete.gender})</p>
-                            </td>
-                            <td className="p-3">
-                              <p className="font-medium">{athlete.country}</p>
-                              <p className="text-[#666] font-mono">{athlete.teamName || 'Independent'}</p>
-                            </td>
-                            <td className="p-3">
-                              <div className="flex justify-center gap-2">
-                                <button
-                                  onClick={() => setEditingAthlete(athlete)}
-                                  className="p-1.5 bg-[#222] hover:bg-[#333] text-[#CCC] rounded hover:text-white"
-                                >
-                                  <Edit3 size={12} />
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteAthlete(athlete.id)}
-                                  className="p-1.5 bg-[#222] hover:bg-red-950/20 text-red-400 rounded hover:text-red-300"
-                                >
-                                  <Trash2 size={12} />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
+          <div className="ranking-list">
+            {rankings.map(row => (
+              <article className="ranking-card" key={row.athlete.id}>
+                <span className="rank">{row.complete ? `#${row.finalRank}` : '—'}</span>
+                <div className="ranking-name"><strong>{localizedName(row.athlete, language)}</strong><small>{row.completedJudges}/{row.requiredJudges} {L('位裁判完成', 'judges completed')}</small></div>
+                <div className="ranking-metric"><small>{L('对赛积分', 'Pairwise points')}</small><strong>{row.pairwisePoints.toFixed(1)}</strong></div>
+                <div className="ranking-metric"><small>{L('胜/和/负', 'W/T/L')}</small><strong>{row.wins}/{row.ties}/{row.losses}</strong></div>
+                <div className="ranking-metric"><small>{L('失误扣分', 'Fault deduction')}</small><strong>-{row.deduction.toFixed(1)}</strong></div>
+              </article>
+            ))}
+            {!rankings.length && <div className="empty">{L('本回合尚未分配运动员。', 'No athletes are assigned to this round.')}</div>}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* TAB 4: COMPETITIONS MANAGEMENT */}
-        {activeTab === 'competitions' && (
-          <div className="space-y-6">
-            <div className="border-b border-[#222] pb-4">
-              <span className="text-[10px] uppercase tracking-[0.2em] text-[#FF4E00] font-mono">CONTEST DIRECTORY</span>
-              <h1 className="text-2xl font-bold tracking-tight text-white">Manage Competitions</h1>
+      {tab === 'people' && (
+        <div className="two-column">
+          <div className="card">
+            <div className="card-heading"><div><h2>{L('运动员', 'Athletes')}</h2><p>{competitionAthletes.length} {L('人', 'people')}</p></div></div>
+            <input type="search" placeholder={L('搜索运动员或国家', 'Search athlete or country')} value={peopleSearch} onChange={event => setPeopleSearch(event.target.value)} />
+            <div className="bilingual-form">
+              <input placeholder={chineseNameLabel} value={newAthleteName} onChange={event => setNewAthleteName(event.target.value)} />
+              <input placeholder={englishNameLabel} value={newAthleteNameEn} onChange={event => setNewAthleteNameEn(event.target.value)} />
+              <button className="secondary-button" onClick={addAthlete}><Plus size={17} />{L('添加', 'Add')}</button>
             </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              
-              {/* Competition Form */}
-              <div className="p-6 bg-[#121212] border border-[#222] rounded-xl flex flex-col gap-4 self-start">
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
-                  {editingComp ? 'Edit Competition' : 'Add New Competition'}
-                </h3>
-
-                <form onSubmit={handleSaveComp} className="space-y-3 text-xs">
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Manual ID Code</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. INTL-2026-IND"
-                      value={editingComp ? editingComp.id : newComp.id}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (editingComp) setEditingComp({ ...editingComp, id: v });
-                        else setNewComp({ ...newComp, id: v });
-                      }}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00] font-mono uppercase"
-                      disabled={!!editingComp}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Name</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. International Individual Finals"
-                      value={editingComp ? editingComp.name : newComp.name}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (editingComp) setEditingComp({ ...editingComp, name: v });
-                        else setNewComp({ ...newComp, name: v });
-                      }}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Contest Type</label>
-                    <select
-                      value={editingComp ? editingComp.type : newComp.type}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (editingComp) setEditingComp({ ...editingComp, type: v as any });
-                        else setNewComp({ ...newComp, type: v as any });
-                      }}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                    >
-                      <option value="Individual Stage">Individual Stage (個人賽 - 5 Dimensions)</option>
-                      <option value="Duo/Team Stage">Duo/Team Stage (雙人/團隊賽 - 5 Dimensions)</option>
-                      <option value="Challenge">Challenge (挑戰賽 - 3 Dimensions)</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Division</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Open Individual / Male"
-                      value={editingComp ? editingComp.division : newComp.division}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (editingComp) setEditingComp({ ...editingComp, division: v });
-                        else setNewComp({ ...newComp, division: v });
-                      }}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Region</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Malaysia"
-                        value={editingComp ? editingComp.region : newComp.region}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (editingComp) setEditingComp({ ...editingComp, region: v });
-                          else setNewComp({ ...newComp, region: v });
-                        }}
-                        className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Status</label>
-                      <select
-                        value={editingComp ? editingComp.status : newComp.status}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (editingComp) setEditingComp({ ...editingComp, status: v as any });
-                          else setNewComp({ ...newComp, status: v as any });
-                        }}
-                        className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                      >
-                        <option value="Draft">Draft</option>
-                        <option value="Active">Active</option>
-                        <option value="Completed">Completed</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2 pt-2">
-                    <button
-                      type="submit"
-                      className="flex-1 py-2 bg-[#FF4E00] text-black font-bold uppercase text-xs rounded hover:bg-[#FF6622]"
-                    >
-                      {editingComp ? 'Save Changes' : 'Create Contest'}
-                    </button>
-                    {editingComp && (
-                      <button
-                        type="button"
-                        onClick={() => setEditingComp(null)}
-                        className="px-3 py-2 bg-[#222] text-[#999] border border-[#333] rounded uppercase text-xs hover:bg-[#333]"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                </form>
-              </div>
-
-              {/* Competitions lists table */}
-              <div className="lg:col-span-2 bg-[#121212] border border-[#222] rounded-xl overflow-hidden">
-                <div className="p-4 bg-[#161616] border-b border-[#222] flex justify-between items-center">
-                  <span className="text-xs uppercase tracking-widest text-[#666] font-mono font-bold">COMPETITIONS DIRECTORY</span>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-[#222] bg-[#161616]/50 text-[#666] font-mono uppercase">
-                        <th className="p-3">ID Code</th>
-                        <th className="p-3">Competition Details</th>
-                        <th className="p-3">Region / Division</th>
-                        <th className="p-3 text-center">Status</th>
-                        <th className="p-3 text-center">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#222] text-[#CCC]">
-                      {competitions.map(comp => (
-                        <tr key={comp.id} className="hover:bg-[#161616]/30 transition-colors">
-                          <td className="p-3 font-mono font-bold text-white text-sm">{comp.id}</td>
-                          <td className="p-3">
-                            <p className="font-bold text-white">{comp.name}</p>
-                            <span className="inline-block mt-1 px-1.5 py-0.5 bg-[#222] text-[#666] text-[9px] rounded uppercase font-mono font-bold tracking-wider">
-                              {comp.type}
-                            </span>
-                          </td>
-                          <td className="p-3">
-                            <p className="font-medium">{comp.region}</p>
-                            <p className="text-[#666]">{comp.division}</p>
-                          </td>
-                          <td className="p-3 text-center">
-                            <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-mono font-bold border ${
-                              comp.status === 'Active' 
-                                ? 'bg-green-500/10 text-green-400 border-green-500/20' 
-                                : comp.status === 'Completed'
-                                  ? 'bg-[#FF4E00]/10 text-[#FF4E00] border-[#FF4E00]/20'
-                                  : 'bg-[#222] text-[#666] border-[#333]'
-                            }`}>
-                              {comp.status}
-                            </span>
-                          </td>
-                          <td className="p-3">
-                            <div className="flex justify-center gap-2">
-                              <button
-                                onClick={() => setEditingComp(comp)}
-                                className="p-1.5 bg-[#222] hover:bg-[#333] text-[#CCC] rounded hover:text-white"
-                              >
-                                <Edit3 size={12} />
-                              </button>
-                              <button
-                                onClick={() => handleDeleteComp(comp.id)}
-                                className="p-1.5 bg-[#222] hover:bg-red-950/20 text-red-400 rounded hover:text-red-300"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
+            {availableAthletes.length > 0 && <div className="assignment-row">
+              <select aria-label={L('选择现有运动员', 'Select existing athlete')} value={athleteToAssign} onChange={event => setAthleteToAssign(event.target.value)}>
+                <option value="">{L('从其他比赛加入现有运动员', 'Add an existing athlete')}</option>
+                {availableAthletes.map(item => <option key={item.id} value={item.id}>{localizedName(item, language)}</option>)}
+              </select>
+              <button className="secondary-button" disabled={!athleteToAssign} onClick={assignExistingAthlete}>{L('加入本比赛', 'Assign')}</button>
+            </div>}
+            <div className="compact-list">{competitionAthletes
+              .filter(item => `${item.name} ${item.country} ${item.school}`.toLowerCase().includes(peopleSearch.toLowerCase()))
+              .sort((a, b) => a.order - b.order)
+              .map(item => <div key={item.id}><span><small>#{item.order} · {item.country}</small><input aria-label={L(`编辑 ${item.name} 华文名字`, `Edit ${item.name} Chinese name`)} value={item.nameZh ?? item.name} onChange={event => onChangeAthletes(athletes.map(athlete => athlete.id === item.id ? { ...athlete, name: event.target.value, nameZh: event.target.value } : athlete))} /><input aria-label={L(`编辑 ${item.name} 英文名字`, `Edit ${item.name} English name`)} value={item.nameEn ?? item.name} onChange={event => onChangeAthletes(athletes.map(athlete => athlete.id === item.id ? { ...athlete, nameEn: event.target.value } : athlete))} /></span><button className="danger-text" onClick={() => onChangeAthletes(athletes.map(athlete => athlete.id === item.id ? { ...athlete, competitionIds: athlete.competitionIds.filter(id => id !== competition?.id) } : athlete))}>{L('移出本比赛', 'Remove')}</button></div>)}</div>
           </div>
-        )}
-
-        {/* TAB 5: JUDGES REGISTRY */}
-        {activeTab === 'judges' && (
-          <div className="space-y-6">
-            <div className="border-b border-[#222] pb-4">
-              <span className="text-[10px] uppercase tracking-[0.2em] text-[#FF4E00] font-mono">OPERATOR ACCREDITATION</span>
-              <h1 className="text-2xl font-bold tracking-tight text-white">Manage Judges & Observers</h1>
+          <div className="card">
+            <div className="card-heading"><div><h2>{L('裁判', 'Judges')}</h2><p>{competitionJudges.length} {L('人', 'people')}</p></div></div>
+            <div className="bilingual-form">
+              <input placeholder={chineseNameLabel} value={newJudgeName} onChange={event => setNewJudgeName(event.target.value)} />
+              <input placeholder={englishNameLabel} value={newJudgeNameEn} onChange={event => setNewJudgeNameEn(event.target.value)} />
+              <select aria-label={L('新裁判类型', 'New judge type')} value={newJudgeRole} onChange={event => setNewJudgeRole(event.target.value as Judge['role'])}><option value="Scoring">{L('评分', 'Scoring')}</option><option value="Technical">{L('技术', 'Technical')}</option></select>
+              <button className="secondary-button" onClick={addJudge}><Plus size={17} />{L('添加', 'Add')}</button>
             </div>
+            {availableJudges.length > 0 && <div className="assignment-row">
+              <select aria-label={L('选择现有裁判', 'Select existing judge')} value={judgeToAssign} onChange={event => setJudgeToAssign(event.target.value)}>
+                <option value="">{L('从其他比赛加入现有裁判', 'Add an existing judge')}</option>
+                {availableJudges.map(item => <option key={item.id} value={item.id}>{localizedName(item, language)}</option>)}
+              </select>
+              <button className="secondary-button" disabled={!judgeToAssign} onClick={assignExistingJudge}>{L('加入本比赛', 'Assign')}</button>
+            </div>}
+            <div className="compact-list">{competitionJudges.map(item => <div key={item.id}><span><small>{judgeRoleLabel(item.role)}</small><input aria-label={L(`编辑 ${item.name} 华文名字`, `Edit ${item.name} Chinese name`)} value={item.nameZh ?? item.name} onChange={event => onChangeJudges(judges.map(judge => judge.id === item.id ? { ...judge, name: event.target.value, nameZh: event.target.value } : judge))} /><input aria-label={L(`编辑 ${item.name} 英文名字`, `Edit ${item.name} English name`)} value={item.nameEn ?? item.name} onChange={event => onChangeJudges(judges.map(judge => judge.id === item.id ? { ...judge, nameEn: event.target.value } : judge))} /></span><button className="danger-text" onClick={() => onChangeJudges(judges.map(judge => judge.id === item.id ? { ...judge, competitionIds: judge.competitionIds.filter(id => id !== competition?.id) } : judge))}>{L('移出本比赛', 'Remove')}</button></div>)}</div>
+          </div>
+        </div>
+      )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              
-              {/* Judge Form */}
-              <div className="p-6 bg-[#121212] border border-[#222] rounded-xl flex flex-col gap-4 self-start">
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Accredit New Judge</h3>
+      {tab === 'sync' && (
+        <div className="two-column">
+          <div className="card">
+            <h2>{L('整库 QR 同步', 'Full database QR sync')}</h2>
+            <p>{L('同步入口已经移到右上角。导出会生成整套数据库 QR；导入会同步背景、赛事、人员、成绩和失误。', 'Sync now lives in the top-right header. Export creates full database QR pages; import syncs background, events, people, scores and faults.')}</p>
+            <div className="sync-count"><strong>{databaseSnapshot.scores.length + databaseSnapshot.faults.length}</strong><span>{L('笔成绩/失误记录已保存在数据库', 'score/fault records saved in database')}</span></div>
+          </div>
+          <div className="card">
+            <h2>{L('联网同步', 'Online sync')}</h2><p>{online ? L('网络可用，可以同步本机记录。', 'Network available. Local records can be synchronized.') : L('当前离线；所有记录继续保存在本机。', 'Offline. All records remain stored on this device.')}</p>
+            <div className="sync-count"><strong>{localCount}</strong><span>{L('笔待同步记录', 'records pending')}</span></div>
+            <button className="primary-button" disabled={syncing} onClick={syncOnline}><CloudUpload size={18} />{syncing ? L('同步中…', 'Syncing…') : online ? L('立即同步', 'Sync now') : L('稍后联网同步', 'Sync when online')}</button>
+          </div>
+        </div>
+      )}
 
-                <form onSubmit={handleSaveJudge} className="space-y-3 text-xs">
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Judge ID Code</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. J-04"
-                      value={newJudge.id}
-                      onChange={(e) => setNewJudge({ ...newJudge, id: e.target.value })}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00] font-mono uppercase"
-                    />
-                  </div>
+      {tab === 'settings' && (
+        <div className="two-column">
+          <div className="card">
+            <h2>{L('系统背景自定义', 'System Background Customization')}</h2>
+            <p>{L('自定义全系统背景，所有用户同步后将看到相同背景。', 'Customize the system background for all users. All devices will see the same background after sync.')}</p>
+            
+            <label>{L('背景类型', 'Background Type')}
+              <select 
+                value={bgType} 
+                onChange={event => {
+                  const type = event.target.value as 'gradient' | 'image' | 'video';
+                  setBgType(type);
+                  setBgValue('');
+                }}
+              >
+                <option value="gradient">{L('渐变色', 'Gradient')}</option>
+                <option value="image">{L('图片', 'Image')}</option>
+              </select>
+            </label>
 
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Name</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. Sarah Connor"
-                      value={newJudge.name}
-                      onChange={(e) => setNewJudge({ ...newJudge, name: e.target.value })}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Judge Role</label>
-                    <select
-                      value={newJudge.role}
-                      onChange={(e) => setNewJudge({ ...newJudge, role: e.target.value as any })}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                    >
-                      <option value="Scoring">Scoring Judge (評審 - Scores active dimensions)</option>
-                      <option value="Technical">Technical Judge (技術失誤裁判 - Logs drop faults)</option>
-                    </select>
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="w-full py-2 bg-[#FF4E00] text-black font-bold uppercase text-xs rounded hover:bg-[#FF6622] pt-2"
+            {bgType === 'gradient' && (
+              <>
+                <label>{L('预设渐变', 'Preset Gradients')}
+                  <select 
+                    value=""
+                    onChange={event => {
+                      if (event.target.value) {
+                        setBgValue(event.target.value);
+                      }
+                    }}
                   >
-                    Accredit Operator
-                  </button>
-                </form>
-              </div>
+                    <option value="">{L('选择预设', 'Select Preset')}</option>
+                    <option value="radial-gradient(circle at 50% -20%, #342018 0, #0d0d0e 42%)">{L('默认 - 余烬', 'Default - Ember')}</option>
+                    <option value="radial-gradient(circle at 50% -20%, #1a2340 0, #0d0d0e 42%)">{L('宇宙', 'Cosmic')}</option>
+                    <option value="radial-gradient(circle at 50% -20%, #0f2820 0, #0d0d0e 42%)">{L('终端', 'Terminal')}</option>
+                    <option value="radial-gradient(circle at 50% -20%, #1a3340 0, #0d0d0e 42%)">{L('海洋', 'Ocean')}</option>
+                    <option value="radial-gradient(circle at 50% -20%, #2a3318 0, #0d0d0e 42%)">{L('森林', 'Forest')}</option>
+                    <option value="radial-gradient(circle at 50% -20%, #402818 0, #0d0d0e 42%)">{L('日落', 'Sunset')}</option>
+                  </select>
+                </label>
+              </>
+            )}
 
-              {/* Judges Registry table */}
-              <div className="lg:col-span-2 bg-[#121212] border border-[#222] rounded-xl overflow-hidden">
-                <div className="p-4 bg-[#161616] border-b border-[#222] flex justify-between items-center">
-                  <span className="text-xs uppercase tracking-widest text-[#666] font-mono font-bold">ACTIVE REGISTRY</span>
+            {bgType === 'image' && (
+              <>
+                <div style={{ margin: '0.8rem 0' }}>
+                  <div style={{ 
+                    fontSize: '0.85rem', 
+                    color: 'var(--muted)', 
+                    marginBottom: '0.5rem' 
+                  }}>
+                    {L('或上传图片文件', 'Or upload image file')}
+                  </div>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={async (event) => {
+                      const file = event.target.files?.[0];
+                      if (!file) return;
+                      
+                      // Check file size (max 5MB)
+                      if (file.size > 5 * 1024 * 1024) {
+                        setNotice(L('图片文件过大，请选择小于5MB的文件', 'Image file too large, please select a file smaller than 5MB'));
+                        return;
+                      }
+                      
+                      // Convert to base64
+                      const reader = new FileReader();
+                      reader.onload = (e) => {
+                        const base64 = e.target?.result as string;
+                        setBgValue(base64);
+                        setNotice(L('图片已加载', 'Image loaded'));
+                      };
+                      reader.onerror = () => {
+                        setNotice(L('图片加载失败', 'Failed to load image'));
+                      };
+                      reader.readAsDataURL(file);
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '0.8rem',
+                      border: '1px solid var(--line)',
+                      borderRadius: '12px',
+                      background: '#111113',
+                      color: '#fff',
+                      cursor: 'pointer'
+                    }}
+                  />
+                  <small style={{ 
+                    display: 'block', 
+                    marginTop: '0.3rem', 
+                    color: 'var(--muted)' 
+                  }}>
+                    {L('支持 JPG, PNG, WebP 格式，最大 5MB', 'Supports JPG, PNG, WebP formats, max 5MB')}
+                  </small>
                 </div>
+              </>
+            )}
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-[#222] bg-[#161616]/50 text-[#666] font-mono uppercase">
-                        <th className="p-3">ID Code</th>
-                        <th className="p-3">Judge Name</th>
-                        <th className="p-3">Assigned Role</th>
-                        <th className="p-3 text-center">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#222] text-[#CCC]">
-                      {judges.map(j => (
-                        <tr key={j.id} className="hover:bg-[#161616]/30 transition-colors">
-                          <td className="p-3 font-mono font-bold text-white text-sm">{j.id}</td>
-                          <td className="p-3 font-bold text-white">{j.name}</td>
-                          <td className="p-3">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${
-                              j.role === 'Technical' 
-                                ? 'bg-[#FF4E00]/10 text-[#FF4E00] border-[#FF4E00]/20' 
-                                : 'bg-green-500/10 text-green-400 border-green-500/20'
-                            }`}>
-                              {j.role.toUpperCase()}
-                            </span>
-                          </td>
-                          <td className="p-3">
-                            <div className="flex justify-center">
-                              <button
-                                onClick={() => handleDeleteJudge(j.id)}
-                                className="p-1.5 bg-[#222] hover:bg-red-950/20 text-red-400 rounded hover:text-red-300"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+            <label>{L('透明度', 'Opacity')}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={bgOpacity}
+                  onChange={event => setBgOpacity(Number(event.target.value))}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ minWidth: '50px', textAlign: 'right' }}>{Math.round(bgOpacity)}%</span>
               </div>
+            </label>
+
+            <div style={{ display: 'flex', gap: '.5rem', marginTop: '1rem' }}>
+              <button 
+                className="secondary-button" 
+                onClick={() => {
+                  if (!bgValue.trim()) {
+                    setNotice(L('请输入背景值', 'Please enter background value'));
+                    return;
+                  }
+                  setBgPreview({
+                    type: bgType,
+                    value: bgValue,
+                    opacity: bgOpacity,
+                    appliedAt: new Date().toISOString()
+                  });
+                  setShowBgPreview(true);
+                }}
+                style={{ flex: 1 }}
+              >
+                {L('预览', 'Preview')}
+              </button>
+              <button 
+                className="primary-button" 
+                onClick={() => {
+                  if (!bgValue.trim()) {
+                    setNotice(L('请输入背景值', 'Please enter background value'));
+                    return;
+                  }
+                  const newBg: BackgroundConfig = {
+                    type: bgType,
+                    value: bgValue,
+                    opacity: bgOpacity,
+                    appliedAt: new Date().toISOString(),
+                    name: bgType === 'gradient' ? L('自定义渐变', 'Custom Gradient') : bgValue.substring(0, 30)
+                  };
+                  
+                  // Add to history
+                  const history = settings.backgroundHistory || [];
+                  const updatedHistory = [newBg, ...history.filter(h => h.value !== newBg.value || h.type !== newBg.type)].slice(0, 10);
+                  
+                  onChangeSettings({ 
+                    ...settings, 
+                    customBackground: newBg,
+                    backgroundHistory: updatedHistory
+                  });
+                  setNotice(L('背景已应用', 'Background applied'));
+                }}
+                style={{ flex: 1 }}
+              >
+                {L('应用背景', 'Apply Background')}
+              </button>
             </div>
+
+            {settings.customBackground && (
+              <button 
+                className="secondary-button" 
+                onClick={() => {
+                  const { customBackground, ...rest } = settings;
+                  onChangeSettings(rest);
+                  setBgValue('');
+                  setBgOpacity(100);
+                  setNotice(L('已恢复默认背景', 'Reset to default'));
+                }}
+                style={{ marginTop: '0.5rem', width: '100%' }}
+              >
+                {L('恢复默认背景', 'Reset to Default')}
+              </button>
+            )}
+
+            {/* Current Background Info */}
+            {settings.customBackground && (
+              <div style={{ 
+                marginTop: '1rem', 
+                padding: '0.8rem', 
+                border: '1px solid var(--line)', 
+                borderRadius: '12px',
+                background: 'var(--panel-soft)'
+              }}>
+                <small style={{ display: 'block', marginBottom: '0.3rem', color: 'var(--muted)' }}>
+                  {L('当前背景', 'Current Background')}
+                </small>
+                <div style={{ fontSize: '0.85rem' }}>
+                  <div>{L('类型', 'Type')}: {settings.customBackground.type}</div>
+                  <div>{L('透明度', 'Opacity')}: {Math.round(settings.customBackground.opacity ?? 100)}%</div>
+                  <div style={{ 
+                    overflow: 'hidden', 
+                    textOverflow: 'ellipsis', 
+                    whiteSpace: 'nowrap',
+                    maxWidth: '100%'
+                  }}>
+                    {L('值', 'Value')}: {settings.customBackground.value.substring(0, 50)}...
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-        )}
 
-        {/* TAB 6: CUSTOMIZABLE EVENTS */}
-        {activeTab === 'events' && (
-          <div className="space-y-6">
-            <div className="border-b border-[#222] pb-4">
-              <span className="text-[10px] uppercase tracking-[0.2em] text-[#FF4E00] font-mono">BRAND & CONTEXT SETUP</span>
-              <h1 className="text-2xl font-bold tracking-tight text-white">Custom Event Themes & Branding</h1>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              
-              {/* Event Form */}
-              <div className="p-6 bg-[#121212] border border-[#222] rounded-xl flex flex-col gap-4 self-start">
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Configure New Event Theme</h3>
-
-                <form onSubmit={handleSaveEvent} className="space-y-3 text-xs">
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Event ID Code</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. ASIA-2026-SG"
-                      value={newEvent.id}
-                      onChange={(e) => setNewEvent({ ...newEvent, id: e.target.value })}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00] font-mono uppercase"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Tournament Name</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. Asia Pacific Diabolo Open"
-                      value={newEvent.name}
-                      onChange={(e) => setNewEvent({ ...newEvent, name: e.target.value })}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Poster Poster Image URL</label>
-                    <input
-                      type="text"
-                      placeholder="https://images.unsplash.com/photo-..."
-                      value={newEvent.poster}
-                      onChange={(e) => setNewEvent({ ...newEvent, poster: e.target.value })}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00] font-mono"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-[#666] uppercase font-mono tracking-widest block mb-1">Background Aesthetics Color Preset</label>
-                    <select
-                      value={newEvent.backgroundTheme}
-                      onChange={(e) => setNewEvent({ ...newEvent, backgroundTheme: e.target.value })}
-                      className="w-full bg-[#161616] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#FF4E00]"
-                    >
-                      <option value="Ember">Ember Gold & Neon Orange (Aesthetic Black Theme)</option>
-                      <option value="Cosmic">Cosmic Space Blue & Aurora Violet</option>
-                      <option value="Terminal">Retro Industrial Terminal Green</option>
-                    </select>
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="w-full py-2 bg-[#FF4E00] text-black font-bold uppercase text-xs rounded hover:bg-[#FF6622] pt-2"
+          {/* Background History */}
+          <div className="card">
+            <h2>{L('背景历史记录', 'Background History')}</h2>
+            <p>{L('点击选择之前使用过的背景', 'Click to reuse previous backgrounds')}</p>
+            
+            {settings.backgroundHistory && settings.backgroundHistory.length > 0 ? (
+              <div style={{ display: 'grid', gap: '.5rem', marginTop: '1rem' }}>
+                {settings.backgroundHistory.map((bg, index) => (
+                  <div
+                    key={index}
+                    className="list-button"
+                    style={{ 
+                      padding: '0.8rem',
+                      background: settings.customBackground?.value === bg.value && settings.customBackground?.type === bg.type
+                        ? 'var(--panel-soft)' 
+                        : 'var(--panel)',
+                      border: settings.customBackground?.value === bg.value && settings.customBackground?.type === bg.type
+                        ? '1px solid var(--accent)'
+                        : '1px solid var(--line)'
+                    }}
                   >
-                    Register Event Brand
-                  </button>
-                </form>
-              </div>
-
-              {/* Events list and active switcher */}
-              <div className="lg:col-span-2 bg-[#121212] border border-[#222] rounded-xl overflow-hidden">
-                <div className="p-4 bg-[#161616] border-b border-[#222] flex justify-between items-center">
-                  <span className="text-xs uppercase tracking-widest text-[#666] font-mono font-bold">EVENTS THEMES DIRECTORY</span>
-                </div>
-
-                <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {events.map(evt => {
-                    const isActive = evt.id === activeEvent.id;
-                    return (
-                      <div
-                        key={evt.id}
-                        className={`p-4 rounded-xl border flex flex-col justify-between h-40 relative overflow-hidden transition-all ${
-                          isActive 
-                            ? 'bg-gradient-to-br from-[#1D1614] to-[#121212] border-[#FF4E00] shadow-[0_8px_20px_rgba(255,78,0,0.15)]' 
-                            : 'bg-[#161616] border-[#222] hover:border-[#444]'
-                        }`}
-                      >
-                        <div>
-                          <p className="text-[10px] font-mono text-[#666] mb-0.5">THEME: {evt.backgroundTheme}</p>
-                          <h4 className="text-sm font-bold text-white line-clamp-2 leading-tight">{evt.name}</h4>
-                          <span className="text-[10px] font-mono text-[#FF4E00] block mt-1">ID: #{evt.id}</span>
-                        </div>
-
-                        <div className="flex items-center justify-between mt-auto pt-2 border-t border-[#222]">
-                          {isActive ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] text-green-400 font-mono">
-                              <CheckCircle size={10} /> CURRENT ACTIVE EVENT
-                            </span>
-                          ) : (
-                            <button
-                              onClick={() => onSetActiveEvent(evt)}
-                              className="px-3 py-1 bg-[#222] text-[#999] rounded text-[10px] uppercase tracking-wider font-bold hover:bg-[#FF4E00] hover:text-black transition-colors"
-                            >
-                              Activate Event Theme
-                            </button>
-                          )}
-                          
-                          <button
-                            onClick={() => handleDeleteEvent(evt.id)}
-                            className="p-1.5 bg-[#222]/50 hover:bg-red-950/20 text-red-400 rounded hover:text-red-300"
-                            disabled={isActive}
-                          >
-                            <Trash2 size={10} />
-                          </button>
-                        </div>
+                    <button
+                      type="button"
+                      className="history-background-select"
+                      onClick={() => {
+                        setBgType(bg.type);
+                        setBgValue(bg.value);
+                        setBgOpacity(bg.opacity ?? 100);
+                      }}
+                      aria-label={L(`选择背景 ${index + 1}`, `Select background ${index + 1}`)}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span className="tag">{bg.type}</span>
+                        <small>{Math.round(bg.opacity ?? 100)}%</small>
+                        {settings.customBackground?.value === bg.value && settings.customBackground?.type === bg.type && (
+                          <Check size={16} style={{ color: 'var(--accent)' }} />
+                        )}
                       </div>
-                    );
-                  })}
-                </div>
+                      <small style={{ 
+                        overflow: 'hidden', 
+                        textOverflow: 'ellipsis', 
+                        whiteSpace: 'nowrap',
+                        maxWidth: '100%'
+                      }}>
+                        {bg.value.substring(0, 60)}...
+                      </small>
+                      <small style={{ color: 'var(--muted)' }}>
+                        {new Date(bg.appliedAt).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US')}
+                      </small>
+                    </button>
+                    <div style={{ display: 'flex', gap: '0.3rem' }}>
+                      <button
+                        className="text-button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setBgPreview(bg);
+                          setShowBgPreview(true);
+                        }}
+                        style={{ padding: '0.3rem 0.5rem' }}
+                      >
+                        {L('预览', 'Preview')}
+                      </button>
+                      <button
+                        className="text-button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onChangeSettings({ 
+                            ...settings, 
+                            customBackground: bg
+                          });
+                          setNotice(L('背景已应用', 'Background applied'));
+                        }}
+                        style={{ padding: '0.3rem 0.5rem' }}
+                      >
+                        {L('应用', 'Apply')}
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
-          </div>
-        )}
+            ) : (
+              <div className="empty" style={{ marginTop: '1rem' }}>
+                {L('暂无历史记录', 'No history yet')}
+              </div>
+            )}
 
-      </main>
+            {settings.backgroundHistory && settings.backgroundHistory.length > 0 && (
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  onChangeSettings({ ...settings, backgroundHistory: [] });
+                  setNotice(L('历史记录已清空', 'History cleared'));
+                }}
+                style={{ marginTop: '0.8rem', width: '100%' }}
+              >
+                {L('清空历史记录', 'Clear History')}
+              </button>
+            )}
+          </div>
+          <div className="card">
+            <h2>{L('首页当前赛事', 'Current event on home screen')}</h2>
+            <p>{L('主页显示赛事名称；个人赛、团体赛等属于赛事下面的比赛项目。其他设备联网同步后会采用同一设置。', 'The home screen shows the event name. Individual and team stages are competitions within that event. Other devices receive the same setting after sync.')}</p>
+            <label>{L('当前赛事', 'Current event')}<select value={settings.activeEventId} onChange={event => onChangeSettings({ ...settings, activeEventId: event.target.value })}>
+              {events.map(item => <option key={item.id} value={item.id}>{localizedName(item, language)}</option>)}
+            </select></label>
+          </div>
+          {competition && <div className="card">
+            <h2>{L('技术失误规则', 'Technical fault rule')}</h2><p>{L('不同赛事规则可能采用 0.3 或 0.5，请赛前确认。', 'Different rules may use 0.3 or 0.5. Confirm before the event.')}</p>
+            <label>{L('每次失误扣分', 'Deduction per fault')}<input type="number" min="0" step="0.1" value={competition.faultDeduction} onChange={event => updateCompetition({ ...competition, faultDeduction: Math.max(0, Number(event.target.value) || 0) })} /></label>
+          </div>}
+          {competition && <div className="card">
+            <h2>{L('比赛人员信息', 'Competition Personnel')}</h2>
+            <p>{L('这些信息会出现在导出的成绩表上', 'This information appears on exported results')}</p>
+            <div className="field-pair">
+              <label>{L('裁判长', 'Chief Judge')}<input value={competition.chiefJudge || ''} onChange={event => updateCompetition({ ...competition, chiefJudge: event.target.value })} placeholder={L('裁判长姓名', 'Chief judge name')} /></label>
+              <label>{L('记录员', 'Recorder')}<input value={competition.recorder || ''} onChange={event => updateCompetition({ ...competition, recorder: event.target.value })} placeholder={L('记录员姓名', 'Recorder name')} /></label>
+            </div>
+          </div>}
+          <div className="card">
+            <h2>{L('赛事主题', 'Event theme')}</h2>
+            {events.map(event => <div className="field-pair" key={event.id}><label>{chineseNameLabel}<input value={event.nameZh ?? event.name} onChange={change => onChangeEvents(events.map(item => item.id === event.id ? { ...item, name: change.target.value, nameZh: change.target.value } : item))} /></label><label>{englishNameLabel}<input value={event.nameEn ?? event.name} onChange={change => onChangeEvents(events.map(item => item.id === event.id ? { ...item, nameEn: change.target.value } : item))} /></label></div>)}
+            <div className="bilingual-form"><input placeholder={L('新赛事华文名字', 'New event Chinese name')} value={newEventName} onChange={event => setNewEventName(event.target.value)} /><input placeholder={L('新赛事英文名字', 'New event English name')} value={newEventNameEn} onChange={event => setNewEventNameEn(event.target.value)} /><button className="secondary-button" onClick={addEvent}><Plus size={17} />{L('新增赛事', 'Add event')}</button></div>
+          </div>
+          <div className="card">
+            <h2>{L('比赛项目', 'Competition')}</h2>
+            {eventCompetitions.map(comp => <div key={comp.id} style={{ marginBottom: '1.2rem' }}><div className="field-pair"><label>{chineseNameLabel}<input value={comp.nameZh ?? comp.name} onChange={event => onChangeCompetitions(competitions.map(item => item.id === comp.id ? { ...item, name: event.target.value, nameZh: event.target.value } : item))} /></label><label>{englishNameLabel}<input value={comp.nameEn ?? comp.name} onChange={event => onChangeCompetitions(competitions.map(item => item.id === comp.id ? { ...item, nameEn: event.target.value } : item))} /></label></div>
+            <label>{L('比赛类型', 'Competition type')}<select value={comp.type} onChange={event => onChangeCompetitions(competitions.map(item => item.id === comp.id ? { ...item, type: event.target.value as Competition['type'] } : item))}>
+              <option value="Individual Stage">{L('个人舞台赛', 'Individual Stage')}</option><option value="Duo/Team Stage">{L('双人/团体舞台赛', 'Duo/Team Stage')}</option><option value="Challenge">{L('挑战赛', 'Challenge')}</option>
+            </select></label></div>)}
+            {!eventCompetitions.length && <p>{L('此赛事还没有比赛项目，请在下方建立第一个比赛。', 'This event has no competition yet. Create the first competition below.')}</p>}
+            <div className="bilingual-form"><input placeholder={L('新比赛华文名字', 'New competition Chinese name')} value={newCompetitionName} onChange={event => setNewCompetitionName(event.target.value)} /><input placeholder={L('新比赛英文名字', 'New competition English name')} value={newCompetitionNameEn} onChange={event => setNewCompetitionNameEn(event.target.value)} /><button className="secondary-button" onClick={addCompetition}><Plus size={17} />{L('新增比赛', 'Add competition')}</button></div>
+          </div>
+          <div className="card database-card">
+            <h2>{L('离线数据库', 'Offline database')}</h2>
+            <p>{L('原生 App 使用 SQLite。浏览器开发模式使用 localStorage fallback，并不会产生可直接双击的 .db 文件。', 'The native app uses SQLite. Browser development uses a localStorage fallback and does not create a directly openable .db file.')}</p>
+            <p>{L('现场若要手动改资料，建议在这里编辑整库 JSON；它会保存回同一套 SQLite 数据。', 'For manual field edits, edit the full database JSON here; it saves back into the same SQLite data store.')}</p>
+            <div className="database-actions">
+              <button className="secondary-button" onClick={openDatabaseJson}>{L('查看/编辑数据库 JSON', 'View/edit database JSON')}</button>
+              <button className="primary-button" disabled={!databaseText.trim()} onClick={saveDatabaseJson}>{L('保存整库 JSON', 'Save database JSON')}</button>
+            </div>
+            {databaseText && (
+              <textarea
+                className="database-editor"
+                value={databaseText}
+                onChange={event => setDatabaseText(event.target.value)}
+                rows={12}
+                spellCheck={false}
+                aria-label={L('数据库 JSON 编辑器', 'Database JSON editor')}
+              />
+            )}
+            <dl>
+              <div><dt>Android</dt><dd>/data/user/0/studio.mdiabolo.scoring/databases/mdiaboloSQLite.db</dd></div>
+              <div><dt>iOS/iPadOS</dt><dd>App Sandbox/Documents/mdiaboloSQLite.db</dd></div>
+              <div><dt>{L('浏览器', 'Browser')}</dt><dd>DevTools → Application → Local Storage → mdiabolo:v2:*</dd></div>
+            </dl>
+          </div>
+        </div>
+      )}
+      
+      {/* Background Preview Modal */}
+      {showBgPreview && bgPreview && (
+        <BackgroundPreviewModal
+          preview={bgPreview}
+          onClose={() => setShowBgPreview(false)}
+          onConfirm={() => {
+            const updatedHistory = [
+              bgPreview, 
+              ...(settings.backgroundHistory || []).filter(h => h.value !== bgPreview.value || h.type !== bgPreview.type)
+            ].slice(0, 10);
+            
+            onChangeSettings({ 
+              ...settings, 
+              customBackground: bgPreview,
+              backgroundHistory: updatedHistory
+            });
+            setBgType(bgPreview.type);
+            setBgValue(bgPreview.value);
+            setBgOpacity(bgPreview.opacity ?? 100);
+            setNotice(L('背景已应用', 'Background applied'));
+          }}
+          language={language}
+        />
+      )}
+    </section>
+  );
+}
+
+// Background Preview Modal Component (helper)
+function BackgroundPreviewModal({ 
+  preview, 
+  onClose, 
+  onConfirm, 
+  language 
+}: { 
+  preview: BackgroundConfig; 
+  onClose: () => void; 
+  onConfirm: () => void; 
+  language: Language; 
+}) {
+  const L = (zh: string, en: string) => `${zh} · ${en}`;
+  const opacity = (preview.opacity ?? 100) / 100;
+  
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-card" onClick={e => e.stopPropagation()} style={{ maxWidth: '90%', width: '800px' }}>
+        <h2>{L('背景预览', 'Background Preview')}</h2>
+        <p style={{ marginBottom: '1rem' }}>
+          {L('查看新背景效果，确认后应用。', 'Review the new background and confirm to apply.')}
+        </p>
+        
+        {/* Preview Area */}
+        <div style={{
+          position: 'relative',
+          width: '100%',
+          height: '400px',
+          borderRadius: '12px',
+          overflow: 'hidden',
+          border: '1px solid var(--line)',
+          marginBottom: '1rem'
+        }}>
+          {preview.type === 'video' ? (
+            <video
+              autoPlay
+              loop
+              muted
+              playsInline
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                opacity
+              }}
+            >
+              <source src={preview.value} type="video/mp4" />
+            </video>
+          ) : (
+            <div style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              background: preview.type === 'gradient' 
+                ? preview.value 
+                : `url(${preview.value}) center/cover no-repeat`,
+              opacity
+            }} />
+          )}
+          
+          {/* Sample Content Overlay */}
+          <div style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            textAlign: 'center',
+            color: '#fff',
+            textShadow: '0 2px 8px rgba(0,0,0,0.5)',
+            zIndex: 1
+          }}>
+            <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>
+              {L('MDiabolo', 'MDiabolo')}
+            </h1>
+            <p style={{ fontSize: '1rem', color: '#f0f0f0' }}>
+              {L('离线计分系统', 'Offline Scoring System')}
+            </p>
+          </div>
+        </div>
+        
+        {/* Info */}
+        <div style={{ 
+          padding: '0.8rem', 
+          background: 'var(--panel-soft)', 
+          borderRadius: '10px',
+          marginBottom: '1rem'
+        }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.9rem' }}>
+            <div><strong>{L('类型', 'Type')}:</strong> {preview.type}</div>
+            <div><strong>{L('透明度', 'Opacity')}:</strong> {Math.round(preview.opacity ?? 100)}%</div>
+          </div>
+          <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>
+            <strong>{L('值', 'Value')}:</strong> {preview.value.substring(0, 80)}{preview.value.length > 80 ? '...' : ''}
+          </div>
+        </div>
+        
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button className="secondary-button" onClick={onClose} style={{ flex: 1 }}>
+            {L('取消', 'Cancel')}
+          </button>
+          <button className="primary-button" onClick={() => { onConfirm(); onClose(); }} style={{ flex: 1 }}>
+            {L('确认应用', 'Confirm & Apply')}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

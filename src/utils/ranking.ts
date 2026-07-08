@@ -1,170 +1,149 @@
-import { Athlete, ScoreSubmission, FaultSubmission, Competition } from '../initialData';
+import type { Athlete, Competition, FaultSubmission, ScoreSubmission } from '../initialData';
 
 export interface CalculatedRow {
   athlete: Athlete;
-  scoresByJudge: { [judgeId: string]: { score: number; rank: number } };
-  totalScore: number; // sum of final scores across all judges
-  totalPlaces: number; // sum of ranks/places across all judges
+  scoresByJudge: Record<string, { score: number; rank: number }>;
+  judgeScores: { judgeName: string; score: number }[];
+  totalScore: number;
+  averageScore: number;
+  pairwisePoints: number;
+  wins: number;
+  ties: number;
+  losses: number;
+  completedJudges: number;
+  requiredJudges: number;
   faultsCount: number;
   deduction: number;
   finalRank: number;
+  complete: boolean;
 }
 
-/**
- * Calculates the places (ranks) for each athlete under each judge, 
- * computes the sum of places (席次和), and ranks athletes based on the Place Method.
- */
 export function calculatePlaceMethodRankings(
   competition: Competition,
+  roundId: string,
   athletes: Athlete[],
   scores: ScoreSubmission[],
   faults: FaultSubmission[],
-  judgesList: { id: string; name: string }[]
+  judges: { id: string; name: string }[]
 ): CalculatedRow[] {
-  // Filter scores and faults for this competition
-  const compScores = scores.filter(s => s.competitionId === competition.id);
-  const compFaults = faults.filter(f => f.competitionId === competition.id);
+  const round = competition.rounds.find(item => item.id === roundId);
+  if (!round) return [];
+  const entrants = athletes.filter(athlete => round.athleteIds.includes(athlete.id));
+  const roundScores = scores.filter(score => score.competitionId === competition.id && score.roundId === roundId);
+  const roundFaults = faults.filter(fault => fault.competitionId === competition.id && fault.roundId === roundId);
+  const scoreIndex = new Map(roundScores.map(score => [`${score.athleteId}:${score.judgeId}`, score]));
+  const faultIndex = new Map(roundFaults.map(fault => [fault.athleteId, fault]));
+  const judgeRanks: Record<string, Record<string, number>> = {};
+  const finalScores: Record<string, Record<string, number>> = {};
 
-  // 1. Calculate final score for each athlete under each judge
-  // Final Score = Judge's Dimension Sum - Technical Faults Deduction (0.5 pts per fault)
-  const finalScores: { [athleteId: string]: { [judgeId: string]: number } } = {};
-  
-  // Also track overall faults per athlete
-  const athleteFaults: { [athleteId: string]: number } = {};
-  athletes.forEach(ath => {
-    const fRecord = compFaults.find(f => f.athleteId === ath.id);
-    athleteFaults[ath.id] = fRecord ? fRecord.faultsCount : 0;
-  });
-
-  athletes.forEach(ath => {
-    finalScores[ath.id] = {};
-    const deduction = athleteFaults[ath.id] * 0.5;
-
-    judgesList.forEach(judge => {
-      const scoreRecord = compScores.find(s => s.athleteId === ath.id && s.judgeId === judge.id);
-      if (scoreRecord) {
-        // Dimension sum minus faults deduction
-        finalScores[ath.id][judge.id] = Math.max(0, scoreRecord.totalScore - deduction);
-      } else {
-        // If not scored yet, default to null or 0. Let's make it 0 for ranking purposes but keep track of unscored status if needed
-        finalScores[ath.id][judge.id] = 0;
-      }
-    });
-  });
-
-  // 2. Rank athletes under EACH judge
-  // For each judge, sort athlete scores descending and assign places/ranks
-  const judgeRanks: { [judgeId: string]: { [athleteId: string]: number } } = {};
-
-  judgesList.forEach(judge => {
-    judgeRanks[judge.id] = {};
-    
-    // Gather all athletes and their scores under this judge
-    const judgeScores = athletes.map(ath => ({
-      athleteId: ath.id,
-      score: finalScores[ath.id][judge.id],
-      // Check if actually scored
-      hasScore: compScores.some(s => s.athleteId === ath.id && s.judgeId === judge.id)
-    }));
-
-    // Sort by score descending
-    judgeScores.sort((a, b) => b.score - a.score);
-
-    // Assign fractional ranks (average rank for ties)
-    // For example, if scores are 90, 90, 80: ranks are 1.5, 1.5, 3
-    let i = 0;
-    while (i < judgeScores.length) {
-      let j = i;
-      while (j < judgeScores.length && judgeScores[j].score === judgeScores[i].score) {
-        j++;
-      }
-      // Ties exist from i to j-1
-      // Sum of positions from i+1 to j
-      let positionSum = 0;
-      for (let p = i + 1; p <= j; p++) {
-        positionSum += p;
-      }
-      const avgRank = positionSum / (j - i);
-
-      for (let k = i; k < j; k++) {
-        // If an athlete is not scored at all, let's rank them last or assign 0.
-        // Usually, unscored athletes shouldn't corrupt the leaderboard, they just have 0 score.
-        judgeRanks[judge.id][judgeScores[k].athleteId] = judgeScores[k].hasScore ? avgRank : athletes.length;
-      }
-      i = j;
-    }
-  });
-
-  // 3. Assemble the intermediate data and compute Total Places (席次和) and Total Score
-  const rows: CalculatedRow[] = athletes.map(ath => {
-    const scoresByJudge: { [judgeId: string]: { score: number; rank: number } } = {};
-    let totalScore = 0;
-    let totalPlaces = 0;
-    let scoredJudgesCount = 0;
-
-    judgesList.forEach(judge => {
-      const score = finalScores[ath.id][judge.id];
-      const rank = judgeRanks[judge.id][ath.id];
-      const hasScore = compScores.some(s => s.athleteId === ath.id && s.judgeId === judge.id);
-
-      scoresByJudge[judge.id] = { score, rank };
-      
-      if (hasScore) {
-        totalScore += score;
-        totalPlaces += rank;
-        scoredJudgesCount++;
-      } else {
-        // Unscored judge adds a placeholder high rank so they don't cheat
-        totalPlaces += athletes.length;
-      }
-    });
-
-    const faultsCount = athleteFaults[ath.id];
-    const deduction = faultsCount * 0.5;
-
-    return {
-      athlete: ath,
-      scoresByJudge,
-      totalScore,
-      totalPlaces,
-      faultsCount,
-      deduction,
-      finalRank: 0 // Will compute below
-    };
-  });
-
-  // 4. Sort the overall rows based on the Place Method
-  // Rules:
-  // - Primary: Lower Total Places is better
-  // - Tiebreaker 1: Higher Total Score is better
-  // - Tiebreaker 2: Lower Faults count is better
-  // - Tiebreaker 3: Athlete ID alphabetical (fallback)
-  rows.sort((a, b) => {
-    if (a.totalPlaces !== b.totalPlaces) {
-      return a.totalPlaces - b.totalPlaces;
-    }
-    if (b.totalScore !== a.totalScore) {
-      return b.totalScore - a.totalScore;
-    }
-    if (a.faultsCount !== b.faultsCount) {
-      return a.faultsCount - b.faultsCount;
-    }
-    return a.athlete.name.localeCompare(b.athlete.name);
-  });
-
-  // 5. Assign overall final ranks (handling ties if absolutely necessary, but usually standard sorting ranks are dense)
-  let currentRank = 1;
-  for (let i = 0; i < rows.length; i++) {
-    if (i > 0 && 
-        rows[i].totalPlaces === rows[i-1].totalPlaces && 
-        rows[i].totalScore === rows[i-1].totalScore && 
-        rows[i].faultsCount === rows[i-1].faultsCount) {
-      // Perfect tie shares the same rank
-      rows[i].finalRank = rows[i-1].finalRank;
-    } else {
-      rows[i].finalRank = i + 1;
+  for (const athlete of entrants) {
+    finalScores[athlete.id] = {};
+    const deduction = faultIndex.get(athlete.id)?.deductionAmount ?? 0;
+    for (const judge of judges) {
+      const submission = scoreIndex.get(`${athlete.id}:${judge.id}`);
+      if (submission) finalScores[athlete.id][judge.id] = Math.max(0, submission.totalScore - deduction);
     }
   }
 
+  for (const judge of judges) {
+    judgeRanks[judge.id] = {};
+    const completed = entrants
+      .filter(athlete => finalScores[athlete.id][judge.id] !== undefined)
+      .map(athlete => ({ athleteId: athlete.id, score: finalScores[athlete.id][judge.id] }))
+      .sort((a, b) => b.score - a.score || a.athleteId.localeCompare(b.athleteId));
+    let position = 0;
+    while (position < completed.length) {
+      let tieEnd = position + 1;
+      while (tieEnd < completed.length && completed[tieEnd].score === completed[position].score) tieEnd++;
+      const averageRank = ((position + 1) + tieEnd) / 2;
+      for (let index = position; index < tieEnd; index++) {
+        judgeRanks[judge.id][completed[index].athleteId] = averageRank;
+      }
+      position = tieEnd;
+    }
+  }
+
+  const rows: CalculatedRow[] = entrants.map(athlete => {
+    const scoresByJudge: Record<string, { score: number; rank: number }> = {};
+    let totalScore = 0;
+    for (const judge of judges) {
+      const score = finalScores[athlete.id][judge.id];
+      const rank = judgeRanks[judge.id][athlete.id];
+      if (score !== undefined && rank !== undefined) {
+        scoresByJudge[judge.id] = { score, rank };
+        totalScore += score;
+      }
+    }
+    const completedJudges = Object.keys(scoresByJudge).length;
+    const fault = faultIndex.get(athlete.id);
+    return {
+      athlete,
+      scoresByJudge,
+      judgeScores: judges
+        .filter(judge => scoresByJudge[judge.id])
+        .map(judge => ({ judgeName: judge.name, score: scoresByJudge[judge.id].score })),
+      totalScore,
+      averageScore: completedJudges ? totalScore / completedJudges : 0,
+      pairwisePoints: 0,
+      wins: 0,
+      ties: 0,
+      losses: 0,
+      completedJudges,
+      requiredJudges: judges.length,
+      faultsCount: fault?.faultsCount ?? 0,
+      deduction: fault?.deductionAmount ?? 0,
+      finalRank: 0,
+      complete: judges.length > 0 && completedJudges === judges.length
+    };
+  });
+
+  for (let left = 0; left < rows.length; left++) {
+    for (let right = left + 1; right < rows.length; right++) {
+      let leftVotes = 0;
+      let rightVotes = 0;
+      for (const judge of judges) {
+        const leftRank = judgeRanks[judge.id][rows[left].athlete.id];
+        const rightRank = judgeRanks[judge.id][rows[right].athlete.id];
+        if (leftRank === undefined || rightRank === undefined) continue;
+        if (leftRank < rightRank) leftVotes++;
+        else if (rightRank < leftRank) rightVotes++;
+        else {
+          leftVotes += 0.5;
+          rightVotes += 0.5;
+        }
+      }
+      const threshold = judges.length / 2;
+      if (leftVotes > threshold) {
+        rows[left].pairwisePoints++;
+        rows[left].wins++;
+        rows[right].losses++;
+      } else if (rightVotes > threshold) {
+        rows[right].pairwisePoints++;
+        rows[right].wins++;
+        rows[left].losses++;
+      } else {
+        rows[left].pairwisePoints += 0.5;
+        rows[right].pairwisePoints += 0.5;
+        rows[left].ties++;
+        rows[right].ties++;
+      }
+    }
+  }
+
+  rows.sort((a, b) =>
+    Number(b.complete) - Number(a.complete) ||
+    b.pairwisePoints - a.pairwisePoints ||
+    b.averageScore - a.averageScore ||
+    a.athlete.order - b.athlete.order
+  );
+  rows.forEach((row, index) => {
+    const previous = rows[index - 1];
+    row.finalRank = previous &&
+      row.complete === previous.complete &&
+      row.pairwisePoints === previous.pairwisePoints &&
+      row.averageScore === previous.averageScore
+      ? previous.finalRank
+      : index + 1;
+  });
   return rows;
 }

@@ -1,20 +1,29 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# MDiabolo Scoring
 
-# Run and deploy your AI Studio app
+Offline-first diabolo competition scoring for phones and iPads.
 
-This contains everything you need to run your app locally.
+## Stack
 
-View your app in AI Studio: https://ai.studio/apps/19f16eef-fa36-438a-81d0-4fad3456946d
+- React + Vite + TypeScript
+- Capacitor for Android, iPhone and iPad
+- Native SQLite for offline competition data
+- QR score transfer with native camera scanning
+- Optional HTTPS synchronization through `VITE_SYNC_ENDPOINT`
 
-## Run Locally
+## Start
 
-**Prerequisites:**  Node.js
+```powershell
+npm install
+npm run dev
+```
 
+## Verify
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```powershell
+npm test
+npm run lint
+npm run build
+npm run cap:sync
+```
+
+See [Architecture](docs/ARCHITECTURE.md), [Database Guide](docs/DATABASE_GUIDE.md), [User Manual](docs/USER_MANUAL.md), [Deployment Guide](docs/DEPLOYMENT_GUIDE.md), and [Requirements Traceability](docs/REQUIREMENTS_TRACEABILITY.md).
