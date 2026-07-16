@@ -8,6 +8,29 @@ import type {
   Judge,
   ScoreSubmission
 } from '../initialData';
+import LZString from 'lz-string';
+
+type BrotliCodec = {
+  compress: (input: Uint8Array, options?: { quality?: number }) => Promise<Uint8Array>;
+  decompress: (input: Uint8Array) => Promise<Uint8Array>;
+};
+
+async function loadBrotli(): Promise<BrotliCodec> {
+  const module = await import('brotli-compress');
+  const candidate = module as unknown as Partial<BrotliCodec> & {
+    default?: Partial<BrotliCodec>;
+    'module.exports'?: Partial<BrotliCodec>;
+  };
+  const codec = candidate.compress && candidate.decompress
+    ? candidate
+    : candidate.default?.compress && candidate.default?.decompress
+      ? candidate.default
+      : candidate['module.exports'];
+  if (!codec?.compress || !codec.decompress) {
+    throw new Error('Brotli codec is unavailable');
+  }
+  return codec as BrotliCodec;
+}
 
 export type QrRecord =
   | { type: 'SCORE'; record: ScoreSubmission }
@@ -33,13 +56,38 @@ export interface DatabaseQrChunk {
   data: string;
 }
 
+export interface ActionLogEntry {
+  id?: number;
+  actionType: string;
+  entityType: string;
+  entityId?: string | null;
+  payload: unknown;
+  createdAt: string;
+}
+
+export interface ActionSyncPackage {
+  protocol: 'mdiabolo-action-sync-v1';
+  packageId?: string;
+  exportedAt: string;
+  sourceDeviceName?: string;
+  exporterName?: string;
+  actions: ActionLogEntry[];
+  snapshot: DatabaseSnapshot;
+}
+
 export interface DecodedDatabaseQrChunk extends DatabaseQrChunk {
   complete: boolean;
 }
 
+export type SyncPayload =
+  | { kind: 'snapshot'; snapshot: DatabaseSnapshot }
+  | { kind: 'actions'; package: ActionSyncPackage };
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.slice(index, index + 0x8000));
+  }
   return btoa(binary);
 }
 
@@ -48,21 +96,64 @@ function base64ToBytes(value: string): Uint8Array {
   return Uint8Array.from(binary, character => character.charCodeAt(0));
 }
 
+function bytesToBase64Url(bytes: Uint8Array): string {
+  return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64UrlToBytes(value: string): Uint8Array {
+  const base64 = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
+  return base64ToBytes(base64);
+}
+
 export function encodeQrRecord(payload: QrRecord): string {
   const json = JSON.stringify(payload.record);
   return `MD2|${payload.type}|${bytesToBase64(new TextEncoder().encode(json))}`;
 }
 
 export function encodeDatabaseSnapshot(snapshot: DatabaseSnapshot, chunkSize = 1600): DatabaseQrChunk[] {
-  const encoded = bytesToBase64(new TextEncoder().encode(JSON.stringify(snapshot)));
+  const encoded = LZString.compressToEncodedURIComponent(JSON.stringify(snapshot));
   const total = Math.max(1, Math.ceil(encoded.length / chunkSize));
   const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
   return Array.from({ length: total }, (_, index) => ({
     id,
     index: index + 1,
     total,
-    data: `MDDB|${id}|${index + 1}|${total}|${encoded.slice(index * chunkSize, (index + 1) * chunkSize)}`
+    data: `MDDBZ|${id}|${index + 1}|${total}|${encoded.slice(index * chunkSize, (index + 1) * chunkSize)}`
   }));
+}
+
+export async function encodeBrotliActionSyncQr(syncPackage: ActionSyncPackage): Promise<string> {
+  const { compress } = await loadBrotli();
+  const compressed = await compress(new TextEncoder().encode(JSON.stringify(syncPackage)), { quality: 11 });
+  return `MDACTB|${bytesToBase64Url(compressed)}`;
+}
+
+export async function encodeBrotliAnimatedActionSyncQr(syncPackage: ActionSyncPackage, chunkSize = 900): Promise<DatabaseQrChunk[]> {
+  const encoded = (await encodeBrotliActionSyncQr(syncPackage)).slice('MDACTB|'.length);
+  const total = Math.max(1, Math.ceil(encoded.length / chunkSize));
+  const id = `B${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
+  return Array.from({ length: total }, (_, index) => ({
+    id,
+    index: index + 1,
+    total,
+    data: `MDACTBP|${id}|${index + 1}|${total}|${encoded.slice(index * chunkSize, (index + 1) * chunkSize)}`
+  }));
+}
+
+function validateActionSyncPackage(parsed: Partial<ActionSyncPackage>): ActionSyncPackage {
+  if (parsed.protocol !== 'mdiabolo-action-sync-v1' || !Array.isArray(parsed.actions) || !parsed.snapshot) {
+    throw new Error('Action QR package is missing required data');
+  }
+  return parsed as ActionSyncPackage;
+}
+
+export async function decodeSimpleActionSyncQrAsync(payload: string): Promise<ActionSyncPackage> {
+  const trimmed = payload.trim();
+  if (!trimmed.startsWith('MDACTB|')) throw new Error('Invalid MDiabolo action QR data');
+  const { decompress } = await loadBrotli();
+  const decompressed = await decompress(base64UrlToBytes(trimmed.slice('MDACTB|'.length)));
+  const json = new TextDecoder().decode(decompressed);
+  return validateActionSyncPackage(JSON.parse(json) as Partial<ActionSyncPackage>);
 }
 
 function requireString(record: Record<string, unknown>, field: string): void {
@@ -111,8 +202,17 @@ export function decodeQrRecord(payload: string): QrRecord {
 }
 
 export function decodeDatabaseQrChunk(payload: string): DecodedDatabaseQrChunk {
+  if (payload.trim().startsWith('MDACTB|')) {
+    return {
+      id: 'ACTION',
+      index: 1,
+      total: 1,
+      data: payload.trim(),
+      complete: true
+    };
+  }
   const parts = payload.trim().split('|');
-  if (parts.length !== 5 || parts[0] !== 'MDDB') {
+  if (parts.length !== 5 || (parts[0] !== 'MDDB' && parts[0] !== 'MDDBZ' && parts[0] !== 'MDACTBP')) {
     throw new Error('Invalid MDiabolo database QR data');
   }
   const index = Number(parts[2]);
@@ -124,18 +224,27 @@ export function decodeDatabaseQrChunk(payload: string): DecodedDatabaseQrChunk {
     id: parts[1],
     index,
     total,
-    data: parts[4],
+    data: payload.trim(),
     complete: total === 1
   };
 }
 
 export function rebuildDatabaseSnapshot(chunks: DatabaseQrChunk[]): DatabaseSnapshot {
+  const payload = rebuildDatabaseSyncPayload(chunks);
+  return payload.kind === 'actions' ? payload.package.snapshot : payload.snapshot;
+}
+
+export function rebuildDatabaseSyncPayload(chunks: DatabaseQrChunk[]): SyncPayload {
   if (!chunks.length) throw new Error('No database QR pages scanned');
+  if (chunks[0].data.trim().startsWith('MDACTB|') || chunks[0].data.trim().startsWith('MDACTBP|')) {
+    throw new Error('Brotli action QR data requires async import');
+  }
   const [{ id, total }] = chunks;
   const unique = new Map(chunks.filter(chunk => chunk.id === id).map(chunk => [chunk.index, chunk]));
   if (unique.size !== total) {
     throw new Error(`Database QR is incomplete: ${unique.size}/${total} pages scanned`);
   }
+  const firstPayloadType = chunks[0].data.split('|')[0];
   const encoded = Array.from({ length: total }, (_, index) => {
     const chunk = unique.get(index + 1);
     if (!chunk) throw new Error(`Database QR page ${index + 1} is missing`);
@@ -144,9 +253,22 @@ export function rebuildDatabaseSnapshot(chunks: DatabaseQrChunk[]): DatabaseSnap
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(new TextDecoder().decode(base64ToBytes(encoded)));
+    const json = firstPayloadType === 'MDDBZ'
+      ? LZString.decompressFromEncodedURIComponent(encoded)
+      : new TextDecoder().decode(base64ToBytes(encoded));
+    if (!json) throw new Error('empty database QR');
+    parsed = JSON.parse(json);
   } catch {
     throw new Error('Database QR data is damaged or incomplete');
+  }
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    !Array.isArray(parsed) &&
+    (parsed as Partial<ActionSyncPackage>).protocol === 'mdiabolo-action-sync-v1' &&
+    (parsed as Partial<ActionSyncPackage>).snapshot
+  ) {
+    return { kind: 'actions', package: parsed as ActionSyncPackage };
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Database QR snapshot is invalid');
@@ -164,5 +286,45 @@ export function rebuildDatabaseSnapshot(chunks: DatabaseQrChunk[]): DatabaseSnap
       typeof snapshot.settings !== 'object') {
     throw new Error('Database QR snapshot is missing required data');
   }
-  return snapshot as DatabaseSnapshot;
+  return { kind: 'snapshot', snapshot: snapshot as DatabaseSnapshot };
+}
+
+export async function rebuildDatabaseSyncPayloadAsync(chunks: DatabaseQrChunk[]): Promise<SyncPayload> {
+  if (!chunks.length) throw new Error('No database QR pages scanned');
+  const firstData = chunks[0].data.trim();
+  if (firstData.startsWith('MDACTB|')) {
+    return { kind: 'actions', package: await decodeSimpleActionSyncQrAsync(firstData) };
+  }
+  const firstPayloadType = firstData.split('|')[0];
+  if (firstPayloadType !== 'MDACTBP') return rebuildDatabaseSyncPayload(chunks);
+
+  const [{ id, total }] = chunks;
+  const unique = new Map(chunks.filter(chunk => chunk.id === id).map(chunk => [chunk.index, chunk]));
+  if (unique.size !== total) {
+    throw new Error(`Database QR is incomplete: ${unique.size}/${total} pages scanned`);
+  }
+  const encoded = Array.from({ length: total }, (_, index) => {
+    const chunk = unique.get(index + 1);
+    if (!chunk) throw new Error(`Database QR page ${index + 1} is missing`);
+    return chunk.data.split('|').at(-1) ?? '';
+  }).join('');
+
+  let parsed: unknown;
+  try {
+    const { decompress } = await loadBrotli();
+    const decompressed = await decompress(base64UrlToBytes(encoded));
+    parsed = JSON.parse(new TextDecoder().decode(decompressed));
+  } catch {
+    throw new Error('Database QR data is damaged or incomplete');
+  }
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    !Array.isArray(parsed) &&
+    (parsed as Partial<ActionSyncPackage>).protocol === 'mdiabolo-action-sync-v1' &&
+    (parsed as Partial<ActionSyncPackage>).snapshot
+  ) {
+    return { kind: 'actions', package: validateActionSyncPackage(parsed as Partial<ActionSyncPackage>) };
+  }
+  throw new Error('Database QR snapshot is missing required data');
 }

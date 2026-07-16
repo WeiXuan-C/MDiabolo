@@ -10,7 +10,11 @@ export function loadLocal<T>(key: string, fallback: T): T {
 }
 
 export function saveLocal<T>(key: string, value: T): void {
-  localStorage.setItem(`${PREFIX}${key}`, JSON.stringify(value));
+  try {
+    localStorage.setItem(`${PREFIX}${key}`, JSON.stringify(value));
+  } catch (error) {
+    console.warn(`Failed to save ${key} to localStorage.`, error);
+  }
 }
 
 export function createId(prefix: string): string {

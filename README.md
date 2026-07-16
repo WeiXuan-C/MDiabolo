@@ -26,4 +26,4 @@ npm run build
 npm run cap:sync
 ```
 
-See [Architecture](docs/ARCHITECTURE.md), [Database Guide](docs/DATABASE_GUIDE.md), [User Manual](docs/USER_MANUAL.md), [Deployment Guide](docs/DEPLOYMENT_GUIDE.md), and [Requirements Traceability](docs/REQUIREMENTS_TRACEABILITY.md).
+See [Quick Start](docs/QUICK_START.md), [User Manual](docs/USER_MANUAL.md), [Architecture](docs/ARCHITECTURE.md), [Database Guide](docs/DATABASE_GUIDE.md), [Deployment Guide](docs/DEPLOYMENT_GUIDE.md), and [Requirements Traceability](docs/REQUIREMENTS_TRACEABILITY.md).

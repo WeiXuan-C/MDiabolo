@@ -22,8 +22,14 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>扫描裁判设备生成的离线评分二维码。</string>
+	<string>MDiabolo needs camera access to scan offline scoring and sync QR codes.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>MDiabolo may save exported scoring files or QR images when you choose to export.</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

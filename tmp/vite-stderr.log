@@ -1,0 +1,12 @@
+[2m12:19:01 pm[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/dev-db/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m12:19:05 pm[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/dev-db/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m12:19:35 pm[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/dev-db/health[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)

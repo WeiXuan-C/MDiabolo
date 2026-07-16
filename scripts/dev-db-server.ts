@@ -28,6 +28,15 @@ db.exec(`
     synced_at TEXT
   );
 
+  CREATE TABLE IF NOT EXISTS action_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_type TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
@@ -256,6 +265,47 @@ function mirrorStateTable(key: string, value: unknown) {
   }
 }
 
+function recordAction(actionType: string, entityType: string, entityId: string | null, payload: unknown) {
+  db.prepare(`
+    INSERT INTO action_log (action_type, entity_type, entity_id, payload, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(actionType, entityType, entityId, JSON.stringify(payload), new Date().toISOString());
+}
+
+function seedDatabaseIfEmpty() {
+  const eventCount = db.prepare('SELECT COUNT(*) AS count FROM events').get() as { count: number };
+  const competitionCount = db.prepare('SELECT COUNT(*) AS count FROM competitions').get() as { count: number };
+  const athleteCount = db.prepare('SELECT COUNT(*) AS count FROM athletes').get() as { count: number };
+  const judgeCount = db.prepare('SELECT COUNT(*) AS count FROM judges').get() as { count: number };
+  const hasCompleteBaseData = eventCount.count > 0 && competitionCount.count > 0 && athleteCount.count > 0 && judgeCount.count > 0;
+  if (hasCompleteBaseData) return;
+
+  const readAppState = <T>(key: string, fallback: T): T => {
+    const row = db.prepare('SELECT value FROM app_state WHERE key = ? LIMIT 1').get(key) as { value?: string } | undefined;
+    if (!row?.value) return fallback;
+    try {
+      return JSON.parse(row.value) as T;
+    } catch {
+      return fallback;
+    }
+  };
+
+  mirrorStateTable('events', readAppState('events', []));
+  mirrorStateTable('competitions', readAppState('competitions', []));
+  mirrorStateTable('athletes', readAppState('athletes', []));
+  mirrorStateTable('judges', readAppState('judges', []));
+  if ((db.prepare('SELECT COUNT(*) AS count FROM scores').get() as { count: number }).count === 0) {
+    mirrorStateTable('scores', readAppState('scores', []));
+  }
+  if ((db.prepare('SELECT COUNT(*) AS count FROM faults').get() as { count: number }).count === 0) {
+    mirrorStateTable('faults', readAppState('faults', []));
+  }
+  mirrorStateTable('admins', readAppState('admins', []));
+  mirrorStateTable('settings', readAppState('settings', { activeEventId: '' }));
+}
+
+seedDatabaseIfEmpty();
+
 function parseJsonField<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback;
   try {
@@ -265,10 +315,63 @@ function parseJsonField<T>(value: string | null | undefined, fallback: T): T {
   }
 }
 
+const singularEntity: Record<string, string> = {
+  events: 'event',
+  competitions: 'competition',
+  athletes: 'athlete',
+  judges: 'judge',
+  scores: 'score',
+  faults: 'fault',
+  admins: 'admin',
+  settings: 'settings'
+};
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function itemId(value: unknown): string | null {
+  return value && typeof value === 'object' && !Array.isArray(value) && typeof (value as { id?: unknown }).id === 'string'
+    ? (value as { id: string }).id
+    : null;
+}
+
+function buildChangeActions(key: string, previous: unknown, next: unknown): Array<{ actionType: string; entityType: string; entityId: string | null; payload: unknown }> {
+  const entityType = singularEntity[key] ?? key;
+  if (Array.isArray(previous) && Array.isArray(next)) {
+    const previousById = new Map(previous.map(item => [itemId(item), item]).filter(([id]) => Boolean(id)) as [string, unknown][]);
+    const nextById = new Map(next.map(item => [itemId(item), item]).filter(([id]) => Boolean(id)) as [string, unknown][]);
+    const actions: Array<{ actionType: string; entityType: string; entityId: string | null; payload: unknown }> = [];
+    for (const [id, item] of nextById) {
+      const before = previousById.get(id);
+      if (!before || stableJson(before) !== stableJson(item)) {
+        actions.push({ actionType: 'upsert', entityType, entityId: id, payload: item });
+      }
+    }
+    for (const [id, item] of previousById) {
+      if (!nextById.has(id)) {
+        actions.push({ actionType: 'delete', entityType, entityId: id, payload: item });
+      }
+    }
+    return actions;
+  }
+  if (stableJson(previous) !== stableJson(next)) {
+    return [{ actionType: 'upsert', entityType, entityId: key === 'settings' ? 'app' : itemId(next), payload: next }];
+  }
+  return [];
+}
+
 function readRelationalState(key: string): unknown | undefined {
   if (key === 'events') {
     const rows = db.prepare('SELECT * FROM events ORDER BY id').all() as any[];
-    if (!rows.length) return undefined;
     return rows.map(row => ({
       id: row.id,
       name: row.name,
@@ -282,7 +385,6 @@ function readRelationalState(key: string): unknown | undefined {
 
   if (key === 'competitions') {
     const competitions = db.prepare('SELECT * FROM competitions ORDER BY id').all() as any[];
-    if (!competitions.length) return undefined;
     const rounds = db.prepare('SELECT * FROM competition_rounds ORDER BY competition_id, sequence').all() as any[];
     return competitions.map(row => ({
       id: row.id,
@@ -314,7 +416,6 @@ function readRelationalState(key: string): unknown | undefined {
 
   if (key === 'athletes') {
     const rows = db.prepare('SELECT * FROM athletes ORDER BY display_order, id').all() as any[];
-    if (!rows.length) return undefined;
     return rows.map(row => ({
       id: row.id,
       order: row.display_order,
@@ -332,7 +433,6 @@ function readRelationalState(key: string): unknown | undefined {
 
   if (key === 'judges') {
     const rows = db.prepare('SELECT * FROM judges ORDER BY id').all() as any[];
-    if (!rows.length) return undefined;
     return rows.map(row => ({
       id: row.id,
       name: row.name,
@@ -345,7 +445,6 @@ function readRelationalState(key: string): unknown | undefined {
 
   if (key === 'scores') {
     const rows = db.prepare('SELECT * FROM scores ORDER BY submitted_at DESC, id').all() as any[];
-    if (!rows.length) return undefined;
     return rows.map(row => ({
       id: row.id,
       competitionId: row.competition_id,
@@ -369,7 +468,6 @@ function readRelationalState(key: string): unknown | undefined {
 
   if (key === 'faults') {
     const rows = db.prepare('SELECT * FROM faults ORDER BY submitted_at DESC, id').all() as any[];
-    if (!rows.length) return undefined;
     return rows.map(row => ({
       id: row.id,
       competitionId: row.competition_id,
@@ -386,7 +484,6 @@ function readRelationalState(key: string): unknown | undefined {
 
   if (key === 'admins') {
     const rows = db.prepare('SELECT * FROM admins ORDER BY created_at').all() as any[];
-    if (!rows.length) return undefined;
     return rows.map(row => ({
       id: row.id,
       name: row.name,
@@ -431,12 +528,21 @@ app.put('/api/dev-db/state/:key', (request, response) => {
   const rawValue = request.body.value;
   const value = JSON.stringify(rawValue);
   const updatedAt = new Date().toISOString();
+  const key = request.params.key;
+  const previous = readRelationalState(key) ?? parseJsonField(
+    (db.prepare('SELECT value FROM app_state WHERE key = ? LIMIT 1').get(key) as { value?: string } | undefined)?.value,
+    undefined
+  );
+  const actions = buildChangeActions(key, previous, rawValue);
   const transaction = db.transaction(() => {
     db.prepare(`
       INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).run(request.params.key, value, updatedAt);
-    mirrorStateTable(request.params.key, rawValue);
+    `).run(key, value, updatedAt);
+    mirrorStateTable(key, rawValue);
+    for (const action of actions) {
+      recordAction(action.actionType, action.entityType, action.entityId, action.payload);
+    }
   });
   transaction();
   response.json({ ok: true, updatedAt });
@@ -455,6 +561,7 @@ app.post('/api/dev-db/sync-queue', (request, response) => {
   const result = db.prepare(
     'INSERT INTO sync_queue (entity_type, entity_id, payload, created_at) VALUES (?, ?, ?, ?)'
   ).run(entityType, entityId, JSON.stringify(payload), new Date().toISOString());
+  recordAction('enqueue', entityType, entityId, payload);
   response.json({ ok: true, id: result.lastInsertRowid });
 });
 
@@ -468,7 +575,21 @@ app.post('/api/dev-db/rebuild-relational', (_request, response) => {
 });
 
 app.get('/api/dev-db/tables/:table', (request, response) => {
-  if (!['app_state', 'sync_queue'].includes(request.params.table)) {
+  const allowedTables = [
+    'app_state',
+    'sync_queue',
+    'action_log',
+    'events',
+    'competitions',
+    'competition_rounds',
+    'athletes',
+    'judges',
+    'scores',
+    'faults',
+    'admins',
+    'settings'
+  ];
+  if (!allowedTables.includes(request.params.table)) {
     response.status(404).json({ error: 'Unknown table' });
     return;
   }

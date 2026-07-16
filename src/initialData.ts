@@ -2,6 +2,7 @@ export type CompetitionType = 'Individual Stage' | 'Duo/Team Stage' | 'Challenge
 export type CompetitionStatus = 'Draft' | 'Active' | 'Completed';
 export type RoundStatus = 'Draft' | 'Active' | 'Completed';
 export type Language = 'zh' | 'en';
+export type AthleteSection = 'Primary' | 'Secondary' | 'Open';
 
 export interface BackgroundConfig {
   type: 'gradient' | 'image' | 'video';
@@ -28,6 +29,7 @@ export interface Athlete {
   school: string;
   age: number;
   gender: 'Male' | 'Female' | 'Co-ed';
+  section?: AthleteSection;
   country: string;
   teamName: string | null;
   competitionIds: string[];
@@ -164,10 +166,10 @@ export const SEEDED_EVENTS: EventConfig[] = [{
 }];
 
 export const SEEDED_ATHLETES: Athlete[] = [
-  { id: 'ATH-0821', order: 1, name: '陈威廷', nameZh: '陈威廷', nameEn: 'Chen Wei Ting', school: 'Taipei Diabolo Association', age: 18, gender: 'Male', country: 'Taiwan', teamName: null, competitionIds: ['INTL-2026-IND'] },
-  { id: 'ATH-0822', order: 2, name: 'Marcus Wong', nameZh: '黄志铭', nameEn: 'Marcus Wong', school: 'Kuala Lumpur Diabolo Club', age: 20, gender: 'Male', country: 'Malaysia', teamName: null, competitionIds: ['INTL-2026-IND'] },
-  { id: 'ATH-0823', order: 3, name: 'Yuki Tanaka', nameZh: '田中勇气', nameEn: 'Yuki Tanaka', school: 'Tokyo Youth Performance School', age: 17, gender: 'Male', country: 'Japan', teamName: null, competitionIds: ['INTL-2026-IND'] },
-  { id: 'ATH-0824', order: 4, name: 'Lucas Dubois', nameZh: '卢卡斯·杜波伊斯', nameEn: 'Lucas Dubois', school: 'Paris Circus Conservatory', age: 19, gender: 'Male', country: 'France', teamName: null, competitionIds: ['INTL-2026-IND'] }
+  { id: 'ATH-0821', order: 1, name: '陈威廷', nameZh: '陈威廷', nameEn: 'Chen Wei Ting', school: 'Taipei Diabolo Association', age: 18, gender: 'Male', section: 'Open', country: 'Taiwan', teamName: null, competitionIds: ['INTL-2026-IND'] },
+  { id: 'ATH-0822', order: 2, name: 'Marcus Wong', nameZh: '黄志铭', nameEn: 'Marcus Wong', school: 'Kuala Lumpur Diabolo Club', age: 20, gender: 'Male', section: 'Open', country: 'Malaysia', teamName: null, competitionIds: ['INTL-2026-IND'] },
+  { id: 'ATH-0823', order: 3, name: 'Yuki Tanaka', nameZh: '田中勇气', nameEn: 'Yuki Tanaka', school: 'Tokyo Youth Performance School', age: 17, gender: 'Male', section: 'Open', country: 'Japan', teamName: null, competitionIds: ['INTL-2026-IND'] },
+  { id: 'ATH-0824', order: 4, name: 'Lucas Dubois', nameZh: '卢卡斯·杜波伊斯', nameEn: 'Lucas Dubois', school: 'Paris Circus Conservatory', age: 19, gender: 'Male', section: 'Open', country: 'France', teamName: null, competitionIds: ['INTL-2026-IND'] }
 ];
 
 const allAthleteIds = SEEDED_ATHLETES.map(athlete => athlete.id);
@@ -184,8 +186,7 @@ export const SEEDED_COMPETITIONS: Competition[] = [{
   status: 'Active',
   faultDeduction: 0.5,
   rounds: [
-    { id: 'R-QUAL', name: '预赛', nameZh: '预赛', nameEn: 'Qualifier', sequence: 1, status: 'Active', athleteIds: allAthleteIds, advancingCount: 3 },
-    { id: 'R-FINAL', name: '决赛', nameZh: '决赛', nameEn: 'Final', sequence: 2, status: 'Draft', athleteIds: [], advancingCount: null }
+    { id: 'R-ONE', name: '比赛', nameZh: '比赛', nameEn: 'Competition', sequence: 1, status: 'Active', athleteIds: allAthleteIds, advancingCount: null }
   ]
 }];
 

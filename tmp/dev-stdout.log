@@ -1,0 +1,106 @@
+
+> react-example@0.0.0 dev
+> tsx scripts/dev-with-db.ts
+
+MDiabolo dev SQLite DB: C:\Users\weixu\MDiabolo\data\mdiabolo.sqlite
+MDiabolo dev DB server: http://localhost:4317/api/dev-db/health
+
+  [32m[1mVITE[22m v6.4.3[39m  [2mready in [0m[1m2044[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m3000[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.100.30:[1m3000[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.100.15:[1m3000[22m/[39m
+[2m12:22:39 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/JudgePanel.tsx, /src/index.css[22m
+[2m12:22:46 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AdminPanel.tsx, /src/index.css[22m
+[2m12:31:04 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release.aab[22m
+[2m12:31:04 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-20260714-185020.aab[22m
+[2m12:31:04 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-20260714-201625.aab[22m
+[2m12:31:04 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-20260714-213843.aab[22m
+[2m12:31:04 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-20260714-214750.aab[22m
+[2m12:31:04 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-20260714-215934.aab[22m
+[2m12:31:04 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-20260714-221021.aab[22m
+[2m12:31:04 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-latest.aab[22m
+[2m12:34:28 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m12:34:35 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css[22m
+[2m12:35:53 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m12:48:50 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/components/AdminPanel.tsx[22m
+[2m12:49:01 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/components/AdminPanel.tsx[22m
+[2m12:49:19 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/components/AdminPanel.tsx[22m
+[2m12:49:44 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/components/AdminPanel.tsx[22m
+[2m12:49:56 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/components/AdminPanel.tsx[22m
+[2m12:52:21 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/components/AdminPanel.tsx[22m
+[2m12:52:40 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/components/AdminPanel.tsx[22m
+[2m12:52:50 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/components/AdminPanel.tsx[22m
+[2m12:58:44 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/src/main/assets/public/index.html[22m
+[2m12:58:45 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/capacitor.build.gradle[22m
+[2m12:58:45 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/capacitor.settings.gradle[22m
+[2m12:58:45 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mios/App/Podfile[22m
+[2m12:59:27 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/build/intermediates/assets/debug/mergeDebugAssets/public/index.html[22m
+[2m12:59:33 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/build/intermediates/assets/release/mergeReleaseAssets/public/index.html[22m
+[2m12:59:53 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/build/reports/problems/problems-report.html[22m
+[2m1:00:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-latest.aab[22m
+[2m1:13:51 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/src/main/assets/public/index.html[22m
+[2m1:13:54 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/capacitor.build.gradle[22m
+[2m1:13:54 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/capacitor.settings.gradle[22m
+[2m1:13:54 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mios/App/Podfile[22m
+[2m1:14:16 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/build/reports/problems/problems-report.html[22m
+[2m1:14:35 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-latest.aab[22m
+[2m2:12:44 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:13:09 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mpublic/mdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:14:16 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mpublic/mdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:14:16 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:25:57 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m2:26:07 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m2:26:53 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m2:27:51 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/src/main/assets/public/index.html[22m
+[2m2:27:51 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/src/main/assets/public/mdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:27:54 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/capacitor.build.gradle[22m
+[2m2:27:54 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/capacitor.settings.gradle[22m
+[2m2:27:54 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mios/App/App/public/mdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:27:54 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mios/App/Podfile[22m
+[2m2:28:06 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/build/intermediates/assets/debug/mergeDebugAssets/public/index.html[22m
+[2m2:28:07 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/build/intermediates/assets/debug/mergeDebugAssets/public/mdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:28:09 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/build/intermediates/assets/release/mergeReleaseAssets/public/index.html[22m
+[2m2:28:09 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/build/intermediates/assets/release/mergeReleaseAssets/public/mdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:28:18 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/build/reports/problems/problems-report.html[22m
+[2m2:29:00 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-latest.aab[22m
+[2m2:35:18 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-import-latest.txt[22m
+[2m2:35:18 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-seed-20260716-132640.sql[22m
+[2m2:35:18 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-import-single-latest.txt[22m
+[2m2:35:18 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-seed-20260716-132834.sql[22m
+[2m2:35:18 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-seed-fixed-20260716-135324.sql[22m
+[2m2:35:18 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-seed-corrected-20260716-135408.sql[22m
+[2m2:35:18 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-snapshot-20260716-132640.json[22m
+[2m2:35:18 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-seed-latest.sql[22m
+[2m2:35:23 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-snapshot-20260716-132834.json[22m
+[2m2:35:23 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-snapshot-fixed-20260716-135324.json[22m
+[2m2:35:23 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-snapshot-corrected-20260716-135408.json[22m
+[2m2:35:32 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:35:32 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-import-20260716-132834.txt[22m
+[2m2:35:32 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-import-chunked-latest.txt[22m
+[2m2:39:13 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m2:40:17 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mpublic/mdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:40:17 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:41:31 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/src/main/assets/public/index.html[22m
+[2m2:41:31 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/src/main/assets/public/mdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:41:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/capacitor.build.gradle[22m
+[2m2:41:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/capacitor.settings.gradle[22m
+[2m2:41:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mios/App/Podfile[22m
+[2m2:41:43 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/build/intermediates/assets/debug/mergeDebugAssets/public/mdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:41:43 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/build/intermediates/assets/debug/mergeDebugAssets/public/index.html[22m
+[2m2:41:44 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/build/intermediates/assets/release/mergeReleaseAssets/public/mdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:41:44 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/app/build/intermediates/assets/release/mergeReleaseAssets/public/index.html[22m
+[2m2:41:52 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mandroid/build/reports/problems/problems-report.html[22m
+[2m2:42:12 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-latest.aab[22m
+[2m2:47:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-import-corrected-latest.txt[22m
+[2m2:47:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-import-english-20260716T064016.txt[22m
+[2m2:47:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-snapshot-english-20260716T064016.json[22m
+[2m2:47:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-snapshot-english-latest.json[22m
+[2m2:47:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mmdiabolo-melaka-2026-animated-qr.html[22m
+[2m2:47:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-20260716-130033.aab[22m
+[2m2:47:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-20260716-131435.aab[22m
+[2m2:47:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-20260716-142833.aab[22m
+[2m2:47:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-20260716-142859.aab[22m
+[2m2:47:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-20260716-144211.aab[22m
+[2m2:47:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mMDiabolo-release-latest.aab[22m
+[2m2:47:34 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mtmp-decoded-snapshot.json[22m

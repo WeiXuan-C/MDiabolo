@@ -1,12 +1,14 @@
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 
-const isWindows = process.platform === 'win32';
-const npmCommand = isWindows ? 'npm.cmd' : 'npm';
-const tsxCommand = isWindows ? 'npx.cmd' : 'npx';
+const root = process.cwd();
+const nodeCommand = process.execPath;
+const tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const viteCli = path.join(root, 'node_modules', 'vite', 'bin', 'vite.js');
 
 const children = [
-  spawn(tsxCommand, ['tsx', 'scripts/dev-db-server.ts'], { stdio: 'inherit', shell: false }),
-  spawn(npmCommand, ['run', 'dev'], { stdio: 'inherit', shell: false })
+  spawn(nodeCommand, [tsxCli, 'scripts/dev-db-server.ts'], { stdio: 'inherit', shell: false }),
+  spawn(nodeCommand, [viteCli, '--port=3000', '--host=0.0.0.0'], { stdio: 'inherit', shell: false })
 ];
 
 const stopAll = () => {

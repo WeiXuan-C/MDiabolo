@@ -1,4 +1,3 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#ff5a1f"/>
-  <path d="M128 128h64l64 112 64-112h64v256h-64V240l-64 104-64-104v144h-64z" fill="#150804"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="MDiabolo logo">
+  <image href="/icon-512.png" width="512" height="512" preserveAspectRatio="xMidYMid slice"/>
 </svg>

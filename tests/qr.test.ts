@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { FaultSubmission, ScoreSubmission } from '../src/initialData';
-import { decodeDatabaseQrChunk, decodeQrRecord, encodeDatabaseSnapshot, encodeQrRecord, rebuildDatabaseSnapshot } from '../src/utils/qr';
+import { decodeDatabaseQrChunk, decodeQrRecord, encodeBrotliActionSyncQr, encodeBrotliAnimatedActionSyncQr, encodeDatabaseSnapshot, encodeQrRecord, rebuildDatabaseSnapshot, rebuildDatabaseSyncPayloadAsync } from '../src/utils/qr';
 
 const score: ScoreSubmission = {
   id: '比赛_预赛_选手_裁判',
@@ -88,4 +88,45 @@ test('round-trips a full database snapshot through paged QR chunks', () => {
   const scanned = encoded.map(chunk => decodeDatabaseQrChunk(chunk.data));
   assert.deepEqual(rebuildDatabaseSnapshot(scanned), snapshot);
   assert.throws(() => rebuildDatabaseSnapshot(scanned.slice(1)), /incomplete|missing/);
+});
+
+test('round-trips a brotli action sync package through pasted and paged QR data', async () => {
+  const snapshot = {
+    protocol: 'mdiabolo-db-v1' as const,
+    exportedAt: '2026-07-08T00:00:00.000Z',
+    athletes: [],
+    competitions: [],
+    judges: [],
+    events: [],
+    scores: [score],
+    faults: [fault],
+    admins: [],
+    settings: { activeEventId: 'E' }
+  };
+  const syncPackage = {
+    protocol: 'mdiabolo-action-sync-v1' as const,
+    exportedAt: '2026-07-08T00:00:00.000Z',
+    actions: Array.from({ length: 8 }, (_, index) => ({
+      actionType: 'upsert',
+      entityType: 'score',
+      entityId: `S-${index}`,
+      payload: { ...score, id: `S-${index}` },
+      createdAt: '2026-07-08T00:00:00.000Z'
+    })),
+    snapshot
+  };
+  const simple = await encodeBrotliActionSyncQr(syncPackage);
+  assert.ok(simple.startsWith('MDACTB|'));
+  const simplePayload = await rebuildDatabaseSyncPayloadAsync([decodeDatabaseQrChunk(simple)]);
+  assert.equal(simplePayload.kind, 'actions');
+
+  const frames = await encodeBrotliAnimatedActionSyncQr(syncPackage, 90);
+  assert.ok(frames.length > 1);
+  assert.ok(frames[0].data.startsWith('MDACTBP|'));
+  const pagedPayload = await rebuildDatabaseSyncPayloadAsync(frames.map(frame => decodeDatabaseQrChunk(frame.data)));
+  assert.equal(pagedPayload.kind, 'actions');
+  if (pagedPayload.kind === 'actions') {
+    assert.equal(pagedPayload.package.actions.length, 8);
+    assert.deepEqual(pagedPayload.package.snapshot, snapshot);
+  }
 });

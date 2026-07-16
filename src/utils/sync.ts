@@ -1,4 +1,5 @@
 import type { AppSettings, FaultSubmission, ScoreSubmission } from '../initialData';
+import { sanitizeTransferSettings } from './transfer';
 
 interface SyncResult {
   syncedScoreIds: string[];
@@ -23,7 +24,7 @@ export async function syncCompetitionRecords(
       deviceTime: new Date().toISOString(),
       scores,
       faults,
-      settings
+      settings: sanitizeTransferSettings(settings)
     })
   });
   if (!response.ok) throw new Error(`同步服务器返回 ${response.status}`);
@@ -31,6 +32,6 @@ export async function syncCompetitionRecords(
   return {
     syncedScoreIds: scores.map(item => item.id),
     syncedFaultIds: faults.map(item => item.id),
-    settings: serverResult.settings
+    settings: serverResult.settings ? sanitizeTransferSettings(serverResult.settings) : undefined
   };
 }
