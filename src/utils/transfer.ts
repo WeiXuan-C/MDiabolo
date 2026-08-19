@@ -41,7 +41,7 @@ export function sanitizeTransferAction(action: ActionLogEntry): ActionLogEntry {
   }
   return {
     ...action,
-    payload: sanitizeTransferSettings(action.payload as AppSettings)
+    payload: sanitizeTransferSettings(action.payload as unknown as AppSettings)
   };
 }
 

@@ -7,7 +7,7 @@ import { Capacitor } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import type { Athlete, Competition, CompetitionRound, Judge, Language, ScoreSubmission, FaultSubmission } from '../initialData';
-import { localizedName } from '../initialData';
+import { getDimensionsConfig, localizedName, REQUIRED_SCORING_JUDGES } from '../initialData';
 
 declare module 'jspdf' {
   interface jsPDF {
@@ -129,6 +129,16 @@ function safeFileName(value: string): string {
     .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
     .replace(/\s+/g, '_')
     .slice(0, 120);
+}
+
+export async function exportTextFile(fileName: string, text: string): Promise<void> {
+  const file = await createDownload(
+    safeFileName(fileName.endsWith('.txt') ? fileName : `${fileName}.txt`),
+    new Blob([text], { type: 'text/plain;charset=utf-8' })
+  );
+  if (!Capacitor.isNativePlatform()) {
+    window.setTimeout(() => URL.revokeObjectURL(file.url), 1000);
+  }
 }
 
 function exportBaseFileName(competition: Competition, language: Language): string {
@@ -309,6 +319,11 @@ function officialScoreInputSheet(
 }
 
 const OFFICIAL_PLACE_METHOD_TEMPLATE = `${import.meta.env.BASE_URL}templates/place-method-five-person-template.xlsx`;
+const CLIENT_TEMPLATE_BY_TYPE: Record<Competition['type'], string> = {
+  Challenge: `${import.meta.env.BASE_URL}templates/challenge-scoring-template.xlsx`,
+  'Individual Stage': `${import.meta.env.BASE_URL}templates/individual-stage-scoring-template.xlsx`,
+  'Duo/Team Stage': `${import.meta.env.BASE_URL}templates/duo-team-stage-scoring-template.xlsx`
+};
 const XLSX_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const XLSX_REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const PACKAGE_REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships';
@@ -331,6 +346,13 @@ const JUDGE_SCORE_TABLE_ROWS = [
   ...Array.from({ length: 20 }, (_, index) => 78 + index)
 ];
 const JUDGE_LABELS_ZH = ['一', '二', '三', '四', '五', '六', '七'];
+const CLIENT_TEMPLATE_ROWS = 50;
+const CLIENT_JUDGE_NAME_CELLS = ['I3', 'O3', 'U3'];
+const CLIENT_JUDGE_DIMENSION_COLUMNS = [
+  ['I', 'J', 'K', 'L', 'M'],
+  ['O', 'P', 'Q', 'R', 'S'],
+  ['U', 'V', 'W', 'X', 'Y']
+] as const;
 
 function parseXml(text: string): XMLDocument {
   return new DOMParser().parseFromString(text, 'application/xml');
@@ -788,6 +810,94 @@ async function exportRankingToOfficialTemplate(
   return createDownload(fileName, blob);
 }
 
+async function exportRankingToClientTemplate(
+  competition: Competition,
+  round: CompetitionRound,
+  rankings: RankingRow[],
+  judges: Judge[],
+  scores: ScoreSubmission[],
+  faults: FaultSubmission[],
+  language: Language
+): Promise<ExportedFile> {
+  if (rankings.length > CLIENT_TEMPLATE_ROWS) {
+    throw new Error(`甲方 Excel 模板最多支持 ${CLIENT_TEMPLATE_ROWS} 名选手。`);
+  }
+  const scoringJudges = judges.filter(judge => judge.role === 'Scoring');
+  if (scoringJudges.length !== REQUIRED_SCORING_JUDGES) {
+    throw new Error(`甲方 Excel 模板需要正好 ${REQUIRED_SCORING_JUDGES} 位评分裁判。`);
+  }
+  if (rankings.some(row => !row.complete)) {
+    throw new Error('仍有选手未完成三位裁判的评分，完成后才能导出正式成绩。');
+  }
+
+  const response = await fetch(CLIENT_TEMPLATE_BY_TYPE[competition.type]);
+  if (!response.ok) throw new Error('找不到对应赛制的甲方 Excel 模板，无法导出。');
+  const zip = await JSZip.loadAsync(await response.arrayBuffer());
+  const sheetPath = await findWorksheetPath(zip, 'KeyIn');
+  const sheetFile = zip.file(sheetPath);
+  if (!sheetFile) throw new Error('甲方 Excel 模板缺少 KeyIn 工作表。');
+  const sheet = parseXml(await sheetFile.async('text'));
+  const sheetData = sheet.getElementsByTagNameNS(XLSX_NS, 'sheetData')[0];
+  if (!sheetData) throw new Error('甲方 Excel 模板的 KeyIn 工作表格式不完整。');
+
+  const dimensions = getDimensionsConfig(competition.type);
+  const scoreIndex = new Map(
+    scores
+      .filter(score => score.competitionId === competition.id && score.roundId === round.id)
+      .map(score => [`${score.athleteId}:${score.judgeId}`, score])
+  );
+  const faultIndex = new Map(
+    faults
+      .filter(fault => fault.competitionId === competition.id && fault.roundId === round.id)
+      .map(fault => [fault.athleteId, fault.deductionAmount])
+  );
+
+  setCellValue(sheet, sheetData, 'H1', localizedName(competition, language));
+  scoringJudges.forEach((judge, index) => {
+    const name = localizedName(judge, language);
+    setCellValue(sheet, sheetData, `B${3 + index}`, name);
+    setCellValue(sheet, sheetData, CLIENT_JUDGE_NAME_CELLS[index], name);
+  });
+
+  for (let index = 0; index < CLIENT_TEMPLATE_ROWS; index++) {
+    const rowNumber = 6 + index;
+    setCellValue(sheet, sheetData, `G${rowNumber}`, '');
+    setCellValue(sheet, sheetData, `H${rowNumber}`, '');
+    for (const columns of CLIENT_JUDGE_DIMENSION_COLUMNS) {
+      for (const column of columns) setCellValue(sheet, sheetData, `${column}${rowNumber}`, '');
+    }
+  }
+
+  [...rankings]
+    .sort((left, right) => left.athlete.order - right.athlete.order)
+    .forEach((row, index) => {
+      const rowNumber = 6 + index;
+      setCellValue(sheet, sheetData, `G${rowNumber}`, localizedName(row.athlete, language));
+      setCellValue(sheet, sheetData, `H${rowNumber}`, (faultIndex.get(row.athlete.id) ?? row.deduction) / 100);
+      scoringJudges.forEach((judge, judgeIndex) => {
+        const submission = scoreIndex.get(`${row.athlete.id}:${judge.id}`);
+        if (!submission) return;
+        dimensions.forEach((dimension, dimensionIndex) => {
+          const column = CLIENT_JUDGE_DIMENSION_COLUMNS[judgeIndex][dimensionIndex];
+          if (!column) return;
+          const value = submission.dimensions[dimension.key] ?? 0;
+          setCellValue(sheet, sheetData, `${column}${rowNumber}`, value / 100);
+        });
+      });
+    });
+
+  zip.file(sheetPath, serializeXml(sheet));
+  await clearAllFormulaCaches(zip);
+  await markWorkbookForRecalculation(zip);
+  const blob = await zip.generateAsync({ type: 'blob', mimeType: XLSX_MIME });
+  const typeLabel = competition.type === 'Challenge'
+    ? '挑战赛'
+    : competition.type === 'Individual Stage'
+      ? '个人舞台赛'
+      : '双人团体舞台赛';
+  return createDownload(`${exportBaseFileName(competition, language)}_${typeLabel}_席次法.xlsx`, blob);
+}
+
 export async function exportRankingToExcel(
   competition: Competition,
   round: CompetitionRound,
@@ -797,8 +907,7 @@ export async function exportRankingToExcel(
   faults: FaultSubmission[],
   language: Language
 ): Promise<ExportedFile> {
-  void faults;
-  return exportRankingToOfficialTemplate(competition, round, rankings, judges, scores, language);
+  return exportRankingToClientTemplate(competition, round, rankings, judges, scores, faults, language);
   const L = (zh: string, en: string) => language === 'zh' ? zh : en;
   const workbook = XLSX.utils.book_new();
   const scoringJudges = judges.filter(j => j.role === 'Scoring');

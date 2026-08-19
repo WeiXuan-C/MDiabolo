@@ -26,11 +26,17 @@ import {
   type Language,
   type ScoreSubmission
 } from '../initialData';
-import { getDimensionsConfig } from '../initialData';
+import { getDefaultFaultDeduction, getDimensionsConfig, REQUIRED_SCORING_JUDGES, SCORING_RULE_VERSION } from '../initialData';
 import { BarcodeFormat, BarcodeScanner } from '@capacitor-mlkit/barcode-scanning';
 import { createAdminAccount, verifyAdminPassword } from '../utils/auth';
 import { calculatePlaceMethodRankings } from '../utils/ranking';
 import { createId } from '../utils/storage';
+import {
+  getAthleteCompetitionOrder,
+  removeAthleteCompetitionOrder,
+  setAthleteCompetitionOrder,
+  withAthleteCompetitionOrder
+} from '../utils/athleteOrder';
 import { syncCompetitionRecords } from '../utils/sync';
 import { decodeQrRecord, type DatabaseSnapshot } from '../utils/qr';
 import { exportRankingToExcel, exportRankingToPDF, openExportedFile as openGeneratedFile, type ExportedFile } from '../utils/export';
@@ -308,7 +314,9 @@ export function AdminPanel(props: AdminPanelProps) {
   const selectedGradientPreset = bgType === 'gradient' && BACKGROUND_GRADIENT_PRESETS.some(preset => preset.value === bgValue)
     ? bgValue
     : '';
-  const competitionAthletes = athletes.filter(item => item.competitionIds.includes(competition?.id ?? ''));
+  const competitionAthletes = athletes
+    .filter(item => item.competitionIds.includes(competition?.id ?? ''))
+    .map(item => withAthleteCompetitionOrder(item, competition?.id ?? ''));
   const competitionJudges = judges.filter(item => item.competitionIds.includes(competition?.id ?? ''));
   const availableAthletes = athletes.filter(item => !item.competitionIds.includes(competition?.id ?? ''));
   const availableJudges = judges.filter(item => !item.competitionIds.includes(competition?.id ?? ''));
@@ -317,7 +325,9 @@ export function AdminPanel(props: AdminPanelProps) {
   const firstRoundId = (item: Competition | undefined) => sortRounds(item?.rounds ?? [])[0]?.id ?? '';
   const athleteIdsForCompetition = (competitionId: string) => athletes
     .filter(item => item.competitionIds.includes(competitionId))
-    .sort((left, right) => left.order - right.order)
+    .sort((left, right) =>
+      getAthleteCompetitionOrder(left, competitionId) - getAthleteCompetitionOrder(right, competitionId)
+    )
     .map(item => item.id);
   const ensureRoundHasEntrants = (item: Competition['rounds'][number], competitionId: string) => item.athleteIds.length
     ? item
@@ -571,7 +581,10 @@ export function AdminPanel(props: AdminPanelProps) {
   const removeAthleteFromCurrentCompetition = async (athleteId: string) => {
     if (!competition) return;
     await onChangeAthletes(athletes.map(athlete => athlete.id === athleteId
-      ? { ...athlete, competitionIds: athlete.competitionIds.filter(id => id !== competition.id) }
+      ? removeAthleteCompetitionOrder({
+          ...athlete,
+          competitionIds: athlete.competitionIds.filter(id => id !== competition.id)
+        }, competition.id)
       : athlete));
     await updateCompetition({
       ...competition,
@@ -611,7 +624,7 @@ export function AdminPanel(props: AdminPanelProps) {
 
   const copyAthleteInfo = async (item: Athlete) => {
     const lines = [
-      `Order: ${item.order}`,
+      `Order: ${competition ? getAthleteCompetitionOrder(item, competition.id) : item.order}`,
       `Name: ${item.nameZh || item.name}`,
       `Team / organization: ${item.school || ''}`,
       `Country / region: ${item.country || ''}`
@@ -768,6 +781,7 @@ export function AdminPanel(props: AdminPanelProps) {
       await onChangeAthletes([...athletes, {
         id: athleteId,
         order: parsedOrder,
+        competitionOrders: competition ? { [competition.id]: parsedOrder } : {},
         name: newAthleteName.trim(),
         nameZh: newAthleteName.trim(),
         nameEn: newAthleteName.trim(),
@@ -796,6 +810,10 @@ export function AdminPanel(props: AdminPanelProps) {
       setNotice(L('请填写裁判名字。', 'Enter the judge name.'));
       return;
     }
+    if (newJudgeRole === 'Scoring' && scoringJudges.length >= REQUIRED_SCORING_JUDGES) {
+      setNotice(L('甲方规则只允许三位评分裁判；可继续添加技术裁判。', 'Client rules allow exactly three scoring judges; technical judges can still be added.'));
+      return;
+    }
     if (!await persistField('add-judge', () => onChangeJudges([...judges, {
       id: createId('J'),
       name: newJudgeName.trim(),
@@ -813,7 +831,7 @@ export function AdminPanel(props: AdminPanelProps) {
     if (!competition || !athletesToAssign.length) return;
     const selectedIds = athletesToAssign;
     const usedOrders = new Set(competitionAthletes.map(item => item.order));
-    const reassignedOrders = new Map<string, number>();
+    const assignedOrders = new Map<string, number>();
     const nextFreeOrder = () => {
       let order = 1;
       while (usedOrders.has(order)) order += 1;
@@ -823,27 +841,20 @@ export function AdminPanel(props: AdminPanelProps) {
     selectedIds.forEach(id => {
       const item = athletes.find(athlete => athlete.id === id);
       if (!item) return;
-      if (usedOrders.has(item.order)) {
-        reassignedOrders.set(id, nextFreeOrder());
-      } else {
-        usedOrders.add(item.order);
-      }
+      assignedOrders.set(id, nextFreeOrder());
     });
     if (!await persistField('assign-athlete', async () => {
       await onChangeAthletes(athletes.map(item => selectedIds.includes(item.id)
-        ? {
+        ? setAthleteCompetitionOrder({
             ...item,
-            order: reassignedOrders.get(item.id) ?? item.order,
             competitionIds: item.competitionIds.includes(competition.id) ? item.competitionIds : [...item.competitionIds, competition.id]
-          }
+          }, competition.id, assignedOrders.get(item.id) ?? 1)
         : item));
       await includeAthletesInFirstRound(selectedIds);
     })) return;
     setAthletesToAssign([]);
     markDone('assign-athlete');
-    setNotice(reassignedOrders.size
-      ? L('已加入本比赛，重复的出场顺序已自动改成下一个可用顺序。', 'Assigned to competition. Duplicate orders were moved to the next available order.')
-      : L('已加入本比赛 ✓', 'Assigned to competition ✓'));
+    setNotice(L('已加入本比赛，并按本项目的下一个出场顺序排列。', 'Assigned to competition with the next available order for this competition.'));
   };
 
   const toggleAthleteToAssign = (athleteId: string) => {
@@ -854,16 +865,17 @@ export function AdminPanel(props: AdminPanelProps) {
 
   const updateAthleteOrder = async (athleteId: string, rawValue: string): Promise<boolean> => {
     const current = athletes.find(item => item.id === athleteId);
-    if (!current) return false;
-    const nextOrder = Math.max(1, Number(rawValue) || current.order);
-    if (nextOrder === current.order) return true;
+    if (!current || !competition) return false;
+    const currentOrder = getAthleteCompetitionOrder(current, competition.id);
+    const nextOrder = Math.max(1, Number(rawValue) || currentOrder);
+    if (nextOrder === currentOrder) return true;
     const duplicate = competitionAthletes.find(item => item.id !== athleteId && item.order === nextOrder);
     if (duplicate) {
       setNotice(L(`出场顺序 #${nextOrder} 已经给了 ${personName(duplicate)}，不能重复。`, `Order #${nextOrder} is already assigned to ${personName(duplicate)}. It cannot be duplicated.`));
       return;
     }
     return persistField(`athlete-${athleteId}-order`, () => onChangeAthletes(athletes.map(athlete => athlete.id === athleteId
-      ? { ...athlete, order: nextOrder }
+      ? setAthleteCompetitionOrder(athlete, competition.id, nextOrder)
       : athlete)));
   };
 
@@ -880,6 +892,11 @@ export function AdminPanel(props: AdminPanelProps) {
 
   const assignExistingJudge = async () => {
     if (!competition || !judgeToAssign) return;
+    const selectedJudge = judges.find(item => item.id === judgeToAssign);
+    if (selectedJudge?.role === 'Scoring' && scoringJudges.length >= REQUIRED_SCORING_JUDGES) {
+      setNotice(L('甲方规则只允许三位评分裁判。', 'Client rules allow exactly three scoring judges.'));
+      return;
+    }
     if (!await persistField('assign-judge', () => onChangeJudges(judges.map(item => item.id === judgeToAssign
       ? { ...item, competitionIds: item.competitionIds.includes(competition.id) ? item.competitionIds : [...item.competitionIds, competition.id] }
       : item)))) return;
@@ -905,7 +922,8 @@ export function AdminPanel(props: AdminPanelProps) {
       region: 'Taiwan',
       division: 'Open',
       status: 'Draft',
-      faultDeduction: 0.5,
+      faultDeduction: getDefaultFaultDeduction('Individual Stage'),
+      scoringRuleVersion: SCORING_RULE_VERSION,
       rounds: [{ id: createId('R'), name: '预赛', nameZh: '预赛', nameEn: 'Qualifier', sequence: 1, status: 'Draft', athleteIds: [], advancingCount: null }]
     };
     if (!await persistField('add-competition', () => onChangeCompetitions([...competitions, created]))) return;
@@ -1146,7 +1164,7 @@ export function AdminPanel(props: AdminPanelProps) {
     .filter(row => !rankingSearchQuery || textIncludes(`${row.finalRank} ${row.athlete.order} ${row.athlete.id} ${row.athlete.name} ${row.athlete.nameZh ?? ''} ${row.athlete.nameEn ?? ''} ${row.athlete.country} ${row.athlete.school}`, rankingSearchQuery))
     .sort((a, b) => {
       if (rankingSort === 'name') return comparePersonName(a.athlete, b.athlete);
-      if (rankingSort === 'points') return b.pairwisePoints - a.pairwisePoints || b.averageScore - a.averageScore || a.athlete.order - b.athlete.order;
+      if (rankingSort === 'points') return b.pairwisePoints - a.pairwisePoints || a.athlete.order - b.athlete.order;
       if (rankingSort === 'average') return b.averageScore - a.averageScore || b.pairwisePoints - a.pairwisePoints || a.athlete.order - b.athlete.order;
       if (rankingSort === 'completion') return b.completedJudges - a.completedJudges || a.athlete.order - b.athlete.order;
       if (rankingSort === 'order') return a.athlete.order - b.athlete.order;
@@ -1254,8 +1272,8 @@ export function AdminPanel(props: AdminPanelProps) {
                 <span className="rank">{row.complete ? `#${row.finalRank}` : '—'}</span>
                 <div className="ranking-name"><strong>{personNameNode(row.athlete)}</strong><small>{row.completedJudges}/{row.requiredJudges} {B('位裁判完成', 'judges completed')}</small></div>
                 <div className="ranking-metric"><small>{B('对赛积分', 'Pairwise points')}</small><strong>{row.pairwisePoints.toFixed(1)}</strong></div>
-                <div className="ranking-metric"><small>{B('胜/和/负', 'W/T/L')}</small><strong>{row.wins}/{row.ties}/{row.losses}</strong></div>
-                <div className="ranking-metric"><small>{B('失误扣分', 'Fault deduction')}</small><strong>-{row.deduction.toFixed(1)}</strong></div>
+                <div className="ranking-metric"><small>{B('总分法名次', 'Total-score rank')}</small><strong>{row.complete ? `#${row.totalScoreRank}` : '—'}</strong></div>
+                <div className="ranking-metric"><small>{B('裁判平均', 'Judge average')}</small><strong>{row.completedJudges ? row.averageScore.toFixed(2) : '—'}</strong></div>
                 <ChevronRight className="ranking-open-icon" size={18} aria-hidden="true" />
               </button>
             ))}
@@ -1283,6 +1301,7 @@ export function AdminPanel(props: AdminPanelProps) {
 
             <div className="ranking-detail-summary">
               <span><small>{B('最终名次', 'Final rank')}</small><strong>{selectedRanking.complete ? `#${selectedRanking.finalRank}` : '-'}</strong></span>
+              <span><small>{B('总分法名次', 'Total-score rank')}</small><strong>{selectedRanking.complete ? `#${selectedRanking.totalScoreRank}` : '-'}</strong></span>
               <span><small>{B('平均分', 'Average')}</small><strong>{selectedRanking.completedJudges ? selectedRanking.averageScore.toFixed(2) : '-'}</strong></span>
               <span><small>{B('对赛积分', 'Pairwise')}</small><strong>{selectedRanking.pairwisePoints.toFixed(1)}</strong></span>
               <span><small>{B('胜/和/负', 'W/T/L')}</small><strong>{selectedRanking.wins}/{selectedRanking.ties}/{selectedRanking.losses}</strong></span>
@@ -1305,8 +1324,8 @@ export function AdminPanel(props: AdminPanelProps) {
                         <div className="dimension-breakdown">
                           {scoreDimensions.map(dimension => (
                             <span key={dimension.key}>
-                              <small><I18nText zh={dimension.label} en={dimension.labelEn} mode={textMode} /></small>
-                              <strong>{(submission.dimensions[dimension.key] ?? 0).toFixed(1)}</strong>
+                              <small><I18nText zh={`${dimension.label}（${dimension.max}%）`} en={`${dimension.labelEn} (${dimension.max}%)`} mode={textMode} /></small>
+                              <strong>{(submission.dimensions[dimension.key] ?? 0).toFixed(1)} / {dimension.max}</strong>
                             </span>
                           ))}
                         </div>
@@ -1865,7 +1884,7 @@ export function AdminPanel(props: AdminPanelProps) {
             </select></SavedControl></label>
           </div>
           {competition && <div className="card">
-            <h2>{B('技术失误规则', 'Technical fault rule')}</h2><p>{B('不同赛事规则可能采用 0.3 或 0.5，请赛前确认。', 'Different rules may use 0.3 or 0.5. Confirm before the event.')}</p>
+            <h2>{B('技术失误规则', 'Technical fault rule')}</h2><p>{B('甲方 2026 规则：挑战赛和个人舞台赛每次扣 2 分，双人/团体舞台赛每次扣 3 分。', 'Client 2026 rules: 2 points per fault for Challenge and Individual Stage; 3 points for Duo/Team Stage.')}</p>
             <label>{B('每次失误扣分', 'Deduction per fault')}<SavedControl field={`competition-${competition.id}-fault`}><input type="number" min="0" step="0.1" value={competition.faultDeduction} onChange={event => void updateCompetition({ ...competition, faultDeduction: Math.max(0, Number(event.target.value) || 0) }, `competition-${competition.id}-fault`)} /></SavedControl></label>
           </div>}
           {competition && <div className="card">
@@ -1938,7 +1957,15 @@ export function AdminPanel(props: AdminPanelProps) {
                     <option value="Active">{competitionStatusLabel('Active')}</option>
                     <option value="Completed">{competitionStatusLabel('Completed')}</option>
                   </select></SavedControl></label>
-                  <label>{B('比赛类型', 'Competition type')}<SavedControl field={`competition-${comp.id}-type`}><select value={comp.type} onChange={event => void persistField(`competition-${comp.id}-type`, () => onChangeCompetitions(competitions.map(item => item.id === comp.id ? { ...item, type: event.target.value as Competition['type'] } : item)))}>
+                  <label>{B('比赛类型', 'Competition type')}<SavedControl field={`competition-${comp.id}-type`}><select value={comp.type} onChange={event => {
+                    const type = event.target.value as Competition['type'];
+                    void persistField(`competition-${comp.id}-type`, () => onChangeCompetitions(competitions.map(item => item.id === comp.id ? {
+                      ...item,
+                      type,
+                      faultDeduction: getDefaultFaultDeduction(type),
+                      scoringRuleVersion: SCORING_RULE_VERSION
+                    } : item)));
+                  }}>
                     <option value="Individual Stage">{L('个人舞台赛', 'Individual Stage')}</option>
                     <option value="Duo/Team Stage">{L('双人/团体舞台赛', 'Duo/Team Stage')}</option>
                     <option value="Challenge">{L('挑战赛', 'Challenge')}</option>

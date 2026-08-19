@@ -3,6 +3,7 @@ export type CompetitionStatus = 'Draft' | 'Active' | 'Completed';
 export type RoundStatus = 'Draft' | 'Active' | 'Completed';
 export type Language = 'zh' | 'en';
 export type AthleteSection = 'Primary' | 'Secondary' | 'Open';
+export type ScoringRuleVersion = 'client-2026-v1';
 
 export interface BackgroundConfig {
   type: 'gradient' | 'image' | 'video';
@@ -22,7 +23,10 @@ export interface AppSettings {
 
 export interface Athlete {
   id: string;
+  /** Legacy global order retained for backwards-compatible imports. */
   order: number;
+  /** Competition-specific running order. Every competition has its own sequence. */
+  competitionOrders?: Record<string, number>;
   name: string;
   nameZh?: string;
   nameEn?: string;
@@ -60,6 +64,7 @@ export interface Competition {
   status: CompetitionStatus;
   rounds: CompetitionRound[];
   faultDeduction: number;
+  scoringRuleVersion?: ScoringRuleVersion;
   chiefJudge?: string;
   recorder?: string;
 }
@@ -126,33 +131,44 @@ export interface AdminAccount {
   createdAt: string;
 }
 
+export const SCORING_RULE_VERSION: ScoringRuleVersion = 'client-2026-v1';
+export const REQUIRED_SCORING_JUDGES = 3;
+
+export const getDefaultFaultDeduction = (type: CompetitionType): number =>
+  type === 'Duo/Team Stage' ? 3 : 2;
+
+export const applyCurrentScoringRules = (competition: Competition): Competition =>
+  competition.scoringRuleVersion === SCORING_RULE_VERSION
+    ? competition
+    : {
+        ...competition,
+        faultDeduction: getDefaultFaultDeduction(competition.type),
+        scoringRuleVersion: SCORING_RULE_VERSION
+      };
+
 export const getDimensionsConfig = (type: CompetitionType) => {
-  const common = [
-    { key: 'action_difficulty', label: '动作难度', labelEn: 'Difficulty', max: 30 },
-    { key: 'action_creativity', label: '动作创意', labelEn: 'Creativity', max: 30 }
-  ] as const;
   if (type === 'Individual Stage') {
     return [
-      common[0],
-      { key: 'stage_artistry', label: '舞台艺术', labelEn: 'Artistry', max: 30 },
-      common[1],
-      { key: 'action_fluency', label: '动作流畅', labelEn: 'Fluency', max: 30 },
+      { key: 'action_difficulty', label: '动作难度', labelEn: 'Difficulty', max: 30 },
+      { key: 'stage_artistry', label: '舞台艺术', labelEn: 'Artistry', max: 25 },
+      { key: 'action_creativity', label: '动作创意', labelEn: 'Creativity', max: 20 },
+      { key: 'action_fluency', label: '动作流畅', labelEn: 'Fluency', max: 15 },
       { key: 'costume_styling', label: '服装造型', labelEn: 'Costume', max: 10 }
     ] as const;
   }
   if (type === 'Duo/Team Stage') {
     return [
-      common[0],
-      { key: 'stage_artistry', label: '舞台艺术', labelEn: 'Artistry', max: 30 },
-      { key: 'action_interaction', label: '动作互动', labelEn: 'Interaction', max: 30 },
-      common[1],
+      { key: 'action_difficulty', label: '动作难度', labelEn: 'Difficulty', max: 35 },
+      { key: 'stage_artistry', label: '舞台艺术', labelEn: 'Artistry', max: 25 },
+      { key: 'action_interaction', label: '动作互动', labelEn: 'Interaction', max: 15 },
+      { key: 'action_creativity', label: '动作创意', labelEn: 'Creativity', max: 15 },
       { key: 'costume_styling', label: '服装造型', labelEn: 'Costume', max: 10 }
     ] as const;
   }
   return [
-    common[0],
-    common[1],
-    { key: 'action_fluency', label: '动作流畅', labelEn: 'Fluency', max: 30 }
+    { key: 'action_difficulty', label: '动作难度', labelEn: 'Difficulty', max: 50 },
+    { key: 'action_creativity', label: '动作创意', labelEn: 'Creativity', max: 30 },
+    { key: 'action_fluency', label: '动作流畅', labelEn: 'Fluency', max: 20 }
   ] as const;
 };
 
@@ -184,7 +200,8 @@ export const SEEDED_COMPETITIONS: Competition[] = [{
   region: 'Asia Pacific',
   division: 'Open Individual',
   status: 'Active',
-  faultDeduction: 0.5,
+  faultDeduction: getDefaultFaultDeduction('Individual Stage'),
+  scoringRuleVersion: SCORING_RULE_VERSION,
   rounds: [
     { id: 'R-ONE', name: '比赛', nameZh: '比赛', nameEn: 'Competition', sequence: 1, status: 'Active', athleteIds: allAthleteIds, advancingCount: null }
   ]

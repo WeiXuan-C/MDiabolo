@@ -18,7 +18,8 @@ import {
   SEEDED_ATHLETES,
   SEEDED_COMPETITIONS,
   SEEDED_EVENTS,
-  SEEDED_JUDGES
+  SEEDED_JUDGES,
+  applyCurrentScoringRules
 } from './initialData';
 import { AdminPanel } from './components/AdminPanel';
 import { JudgePanel } from './components/JudgePanel';
@@ -26,17 +27,23 @@ import { LogoMark } from './components/LogoMark';
 import { loadLocal, saveLocal } from './utils/storage';
 import { repository } from './utils/repository';
 import { migrateAthletes, migrateCompetitions, migrateEvents, migrateJudges } from './utils/bilingual';
+import { normalizeAthleteCompetitionOrders } from './utils/athleteOrder';
+import { exportTextFile } from './utils/export';
 import { I18nText, formatText, nextTextMode, singleNameNodeForMode, textModeLabel, textModeShortLabel, type TextMode } from './utils/i18n';
 import { mergeIncomingTransferSettings, sanitizeTransferAction, sanitizeTransferPackage, sanitizeTransferSettings, sanitizeTransferSnapshot } from './utils/transfer';
 import {
   decodeDatabaseQrChunk,
   encodeBrotliActionSyncQr,
   encodeBrotliAnimatedActionSyncQr,
+  mergeDatabaseSnapshots,
+  mergeDatabaseSyncPayloads,
   rebuildDatabaseSyncPayloadAsync,
+  rebuildDatabaseSyncPayloadsFromTextAsync,
   type ActionLogEntry,
   type ActionSyncPackage,
   type DatabaseQrChunk,
-  type DatabaseSnapshot
+  type DatabaseSnapshot,
+  type SyncPayload
 } from './utils/qr';
 
 type Screen = 'role' | 'judge-select' | 'judge' | 'admin';
@@ -127,7 +134,7 @@ const FONT_SCALE_DEFAULT_VERSION = '115';
 
 function loadInitialFontScale() {
   const stored = loadLocal<number | null>('fontScale', null);
-  const migratedVersion = loadLocal('fontScaleDefaultVersion', '');
+  const migratedVersion = loadLocal<string>('fontScaleDefaultVersion', '');
   if ((stored === null || stored === 100) && migratedVersion !== FONT_SCALE_DEFAULT_VERSION) {
     saveLocal('fontScaleDefaultVersion', FONT_SCALE_DEFAULT_VERSION);
     return DEFAULT_FONT_SCALE;
@@ -165,6 +172,7 @@ export default function App() {
   const [importText, setImportText] = useState('');
   const [databaseQrChunks, setDatabaseQrChunks] = useState<Record<string, DatabaseQrChunk[]>>({});
   const databaseQrChunksRef = useRef<Record<string, DatabaseQrChunk[]>>({});
+  const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const [syncPreview, setSyncPreview] = useState<SyncPreview | null>(null);
   const [showSyncDetails, setShowSyncDetails] = useState(false);
   const [integrationHistory, setIntegrationHistory] = useState<IntegrationLogEntry[]>(() => loadLocal('integrationHistory', []));
@@ -274,15 +282,15 @@ export default function App() {
       , repository.load<AppSettings>('settings', { activeEventId: '' })
     ]).then(([storedAthletes, storedCompetitions, storedJudges, storedEvents, storedScores, storedFaults, storedAdmins, storedSettings]) => {
       if (!active) return;
-      const migratedCompetitions = migrateCompetitions(storedCompetitions, SEEDED_COMPETITIONS);
-      const migratedAthletes = migrateAthletes(storedAthletes, SEEDED_ATHLETES).map(athlete => ({
+      const migratedCompetitions = migrateCompetitions(storedCompetitions, SEEDED_COMPETITIONS).map(applyCurrentScoringRules);
+      const migratedAthletes = normalizeAthleteCompetitionOrders(migrateAthletes(storedAthletes, SEEDED_ATHLETES).map(athlete => ({
         ...athlete,
         competitionIds: athlete.competitionIds.length
           ? athlete.competitionIds
           : migratedCompetitions
               .filter(item => item.rounds.some(round => round.athleteIds.includes(athlete.id)))
               .map(item => item.id)
-      }));
+      })));
       const migratedJudges = migrateJudges(storedJudges, SEEDED_JUDGES);
       const migratedEvents = migrateEvents(storedEvents, SEEDED_EVENTS);
       setAthletes(migratedAthletes);
@@ -313,9 +321,9 @@ export default function App() {
       const storedCompetitions = loadLocal<Competition[]>('competitions', []);
       const storedJudges = loadLocal<Judge[]>('judges', []);
       const storedEvents = loadLocal<EventConfig[]>('events', []);
-      const migratedCompetitions = migrateCompetitions(storedCompetitions, SEEDED_COMPETITIONS);
+      const migratedCompetitions = migrateCompetitions(storedCompetitions, SEEDED_COMPETITIONS).map(applyCurrentScoringRules);
       const migratedEvents = migrateEvents(storedEvents, SEEDED_EVENTS);
-      setAthletes(migrateAthletes(storedAthletes, SEEDED_ATHLETES));
+      setAthletes(normalizeAthleteCompetitionOrders(migrateAthletes(storedAthletes, SEEDED_ATHLETES)));
       setCompetitions(migratedCompetitions);
       setJudges(migrateJudges(storedJudges, SEEDED_JUDGES));
       setEvents(migratedEvents);
@@ -714,7 +722,7 @@ export default function App() {
 
   const applyDatabaseSnapshot = async (snapshot: DatabaseSnapshot) => {
     try {
-      await update<Athlete[]>('athletes', setAthletes, snapshot.athletes);
+      await update<Athlete[]>('athletes', setAthletes, normalizeAthleteCompetitionOrders(snapshot.athletes));
       await update<Competition[]>('competitions', setCompetitions, snapshot.competitions);
       await update<Judge[]>('judges', setJudges, snapshot.judges);
       await update<EventConfig[]>('events', setEvents, snapshot.events);
@@ -733,7 +741,7 @@ export default function App() {
     try {
       await update<EventConfig[]>('events', setEvents, resolveItems('event', events, snapshot.events, syncPreview));
       await update<Competition[]>('competitions', setCompetitions, resolveItems('competition', competitions, snapshot.competitions, syncPreview));
-      await update<Athlete[]>('athletes', setAthletes, resolveItems('athlete', athletes, snapshot.athletes, syncPreview));
+      await update<Athlete[]>('athletes', setAthletes, normalizeAthleteCompetitionOrders(resolveItems('athlete', athletes, snapshot.athletes, syncPreview)));
       await update<Judge[]>('judges', setJudges, resolveItems('judge', judges, snapshot.judges, syncPreview));
       await update<ScoreSubmission[]>('scores', setScores, resolveItems('score', scores, snapshot.scores, syncPreview));
       await update<FaultSubmission[]>('faults', setFaults, resolveItems('fault', faults, snapshot.faults, syncPreview));
@@ -851,18 +859,70 @@ export default function App() {
     );
   };
 
+  const exportQrDataAsText = async () => {
+    if (!exportQrPages.length) return;
+    await exportTextFile(
+      `MDiabolo-sync-${new Date().toISOString()}.txt`,
+      exportQrPages.map(page => page.data).join('\n')
+    );
+    setSyncNotice(L('TXT 数据包已导出。', 'TXT data package exported.'));
+  };
+
+  const showSyncPayloadPreview = (syncPayload: SyncPayload, autoMergeLocal = false): boolean => {
+    let syncPackage = syncPayload.kind === 'actions' ? sanitizeTransferPackage(syncPayload.package) : undefined;
+    let snapshot = syncPayload.kind === 'actions' ? syncPackage!.snapshot : sanitizeTransferSnapshot(syncPayload.snapshot);
+    if (autoMergeLocal) {
+      const localSnapshot = databaseSnapshot();
+      snapshot = mergeDatabaseSnapshots([
+        snapshot,
+        {
+          ...localSnapshot,
+          // Keep existing reference data when the same IDs occur on several
+          // field devices, while still adding every new score and fault.
+          exportedAt: snapshot.exportedAt,
+          settings: events.length || competitions.length ? localSnapshot.settings : snapshot.settings
+        }
+      ]);
+      if (syncPackage) syncPackage = { ...syncPackage, snapshot };
+    }
+    const packageId = syncPackageIdentity(snapshot, syncPackage);
+    if (integrationHistory.some(entry => entry.packageId === packageId)) {
+      setShowImportPanel(false);
+      setImportText('');
+      resetDatabaseQrChunks();
+      setSyncNotice(L('这包 QR 已经整合过，不需要重复导入。', 'This QR package has already been integrated. No need to import it again.'));
+      return true;
+    }
+    setSyncPreview(buildSyncPreview(snapshot, syncPackage));
+    setShowSyncDetails(false);
+    setShowImportPanel(false);
+    setImportText('');
+    resetDatabaseQrChunks();
+    setSyncNotice(L(
+      autoMergeLocal
+        ? '多个数据包已自动合并，请确认新增评分与失误记录。'
+        : 'QR 已读取，请点击预览里的详情确认会整合什么。',
+      autoMergeLocal
+        ? 'Multiple packages were merged automatically. Review the new scores and faults.'
+        : 'QR read. Open the preview details to confirm what will be integrated.'
+    ));
+    return true;
+  };
+
   const importDatabaseQrPayload = async (payload: string): Promise<boolean> => {
     const payloads = payload
       .split(/\r?\n/)
       .map(item => item.trim())
       .filter(Boolean);
     if (payloads.length > 1) {
-      resetDatabaseQrChunks();
-      let complete = false;
-      for (const item of payloads) {
-        complete = await importDatabaseQrPayload(item) || complete;
+      try {
+        resetDatabaseQrChunks();
+        const syncPayloads = await rebuildDatabaseSyncPayloadsFromTextAsync(payload);
+        return showSyncPayloadPreview(mergeDatabaseSyncPayloads(syncPayloads), syncPayloads.length > 1);
+      } catch (error) {
+        setSyncNotice(error instanceof Error ? error.message : L('数据库 QR 导入失败。', 'Database QR import failed.'));
+        return false;
       }
-      return complete;
     }
     try {
       const chunk = decodeDatabaseQrChunk(payload);
@@ -882,26 +942,21 @@ export default function App() {
         return false;
       }
       const syncPayload = await rebuildDatabaseSyncPayloadAsync(nextChunks);
-      const syncPackage = syncPayload.kind === 'actions' ? sanitizeTransferPackage(syncPayload.package) : undefined;
-      const snapshot = syncPayload.kind === 'actions' ? syncPackage!.snapshot : sanitizeTransferSnapshot(syncPayload.snapshot);
-      const packageId = syncPackageIdentity(snapshot, syncPackage);
-      if (integrationHistory.some(entry => entry.packageId === packageId)) {
-        setShowImportPanel(false);
-        setImportText('');
-        resetDatabaseQrChunks();
-        setSyncNotice(L('这包 QR 已经整合过，不需要重复导入。', 'This QR package has already been integrated. No need to import it again.'));
-        return true;
-      }
-      setSyncPreview(buildSyncPreview(snapshot, syncPackage));
-      setShowSyncDetails(false);
-      setShowImportPanel(false);
-      setImportText('');
-      resetDatabaseQrChunks();
-      setSyncNotice(L('QR 已读取，请点击预览里的详情确认会整合什么。', 'QR read. Open the preview details to confirm what will be integrated.'));
-      return true;
+      return showSyncPayloadPreview(syncPayload);
     } catch (error) {
       setSyncNotice(error instanceof Error ? error.message : L('数据库 QR 导入失败。', 'Database QR import failed.'));
       return false;
+    }
+  };
+
+  const importDatabaseTextFile = async (file: File) => {
+    try {
+      const text = await file.text();
+      if (!text.trim()) throw new Error(L('TXT 文件是空的。', 'The TXT file is empty.'));
+      setImportText(text);
+      await importDatabaseQrPayload(text);
+    } catch (error) {
+      setSyncNotice(error instanceof Error ? error.message : L('TXT 文件读取失败。', 'Unable to read the TXT file.'));
     }
   };
 
@@ -1205,6 +1260,7 @@ export default function App() {
             <small>{T('包含本机可同步的数据；导入时会先让你确认冲突。', 'Includes syncable data from this device. Import will ask you to review conflicts first.')}</small>
             <div className="qr-export-actions">
               <button className="secondary-button" onClick={() => void copyExportQrData()}>{T('复制导入数据', 'Copy import data')}</button>
+              <button className="secondary-button" onClick={() => void exportQrDataAsText()}><Download size={18} />{T('导出 TXT', 'Export TXT')}</button>
             </div>
             <textarea
               className="qr-data-copy"
@@ -1223,8 +1279,22 @@ export default function App() {
         <div className="modal-backdrop" role="presentation" onClick={() => setShowImportPanel(false)}>
           <div className="modal-card import-card" role="dialog" aria-modal="true" aria-label={L('导入数据库', 'Import database')} onClick={event => event.stopPropagation()}>
             <h2>{T('导入 QR', 'Import QR')}</h2>
-            <p>{T('扫描对方手机上的同步 QR。', 'Scan the sync QR on the other phone.')}</p>
-            <button className="primary-button" onClick={() => void scanDatabaseQr()}><QrCode size={18} />{T('打开相机扫码', 'Open camera scanner')}</button>
+            <p>{T('扫描同步 QR、选择 TXT 文件，或粘贴同步数据。', 'Scan a sync QR, choose a TXT file, or paste sync data.')}</p>
+            <div className="import-source-actions">
+              <button className="primary-button" onClick={() => void scanDatabaseQr()}><QrCode size={18} />{T('打开相机扫码', 'Open camera scanner')}</button>
+              <button className="secondary-button" onClick={() => importFileInputRef.current?.click()}><Upload size={18} />{T('导入 TXT', 'Import TXT')}</button>
+            </div>
+            <input
+              ref={importFileInputRef}
+              className="hidden-file-input"
+              type="file"
+              accept=".txt,text/plain"
+              onChange={event => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = '';
+                if (file) void importDatabaseTextFile(file);
+              }}
+            />
             <textarea value={importText} onChange={event => setImportText(event.target.value)} placeholder="MDACTB|... / MDDBZ|..." rows={5} />
             <button className="secondary-button" disabled={!importText.trim()} onClick={() => void importDatabaseQrPayload(importText)}>{T('粘贴导入', 'Import pasted data')}</button>
           </div>

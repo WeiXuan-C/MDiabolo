@@ -1,4 +1,5 @@
-import type { Athlete, Competition, FaultSubmission, ScoreSubmission } from '../initialData';
+import { REQUIRED_SCORING_JUDGES, type Athlete, type Competition, type FaultSubmission, type ScoreSubmission } from '../initialData';
+import { withAthleteCompetitionOrder } from './athleteOrder';
 
 export interface CalculatedRow {
   athlete: Athlete;
@@ -6,6 +7,7 @@ export interface CalculatedRow {
   judgeScores: { judgeName: string; score: number }[];
   totalScore: number;
   averageScore: number;
+  totalScoreRank: number;
   pairwisePoints: number;
   wins: number;
   ties: number;
@@ -28,24 +30,29 @@ export function calculatePlaceMethodRankings(
 ): CalculatedRow[] {
   const round = competition.rounds.find(item => item.id === roundId);
   if (!round) return [];
-  const entrants = athletes.filter(athlete => round.athleteIds.includes(athlete.id));
+  const entrants = athletes
+    .filter(athlete => round.athleteIds.includes(athlete.id))
+    .map(athlete => withAthleteCompetitionOrder(athlete, competition.id));
   const roundScores = scores.filter(score => score.competitionId === competition.id && score.roundId === roundId);
   const roundFaults = faults.filter(fault => fault.competitionId === competition.id && fault.roundId === roundId);
   const scoreIndex = new Map(roundScores.map(score => [`${score.athleteId}:${score.judgeId}`, score]));
   const faultIndex = new Map(roundFaults.map(fault => [fault.athleteId, fault]));
+  const scoringJudges = judges.slice(0, REQUIRED_SCORING_JUDGES);
   const judgeRanks: Record<string, Record<string, number>> = {};
   const finalScores: Record<string, Record<string, number>> = {};
 
   for (const athlete of entrants) {
     finalScores[athlete.id] = {};
     const deduction = faultIndex.get(athlete.id)?.deductionAmount ?? 0;
-    for (const judge of judges) {
+    for (const judge of scoringJudges) {
       const submission = scoreIndex.get(`${athlete.id}:${judge.id}`);
-      if (submission) finalScores[athlete.id][judge.id] = Math.max(0, submission.totalScore - deduction);
+      if (submission) {
+        finalScores[athlete.id][judge.id] = Math.max(0, submission.totalScore - deduction);
+      }
     }
   }
 
-  for (const judge of judges) {
+  for (const judge of scoringJudges) {
     judgeRanks[judge.id] = {};
     const completed = entrants
       .filter(athlete => finalScores[athlete.id][judge.id] !== undefined)
@@ -66,7 +73,7 @@ export function calculatePlaceMethodRankings(
   const rows: CalculatedRow[] = entrants.map(athlete => {
     const scoresByJudge: Record<string, { score: number; rank: number }> = {};
     let totalScore = 0;
-    for (const judge of judges) {
+    for (const judge of scoringJudges) {
       const score = finalScores[athlete.id][judge.id];
       const rank = judgeRanks[judge.id][athlete.id];
       if (score !== undefined && rank !== undefined) {
@@ -79,21 +86,22 @@ export function calculatePlaceMethodRankings(
     return {
       athlete,
       scoresByJudge,
-      judgeScores: judges
+      judgeScores: scoringJudges
         .filter(judge => scoresByJudge[judge.id])
         .map(judge => ({ judgeName: judge.name, score: scoresByJudge[judge.id].score })),
       totalScore,
       averageScore: completedJudges ? totalScore / completedJudges : 0,
+      totalScoreRank: 0,
       pairwisePoints: 0,
       wins: 0,
       ties: 0,
       losses: 0,
       completedJudges,
-      requiredJudges: judges.length,
+      requiredJudges: REQUIRED_SCORING_JUDGES,
       faultsCount: fault?.faultsCount ?? 0,
       deduction: fault?.deductionAmount ?? 0,
       finalRank: 0,
-      complete: judges.length > 0 && completedJudges === judges.length
+      complete: scoringJudges.length === REQUIRED_SCORING_JUDGES && completedJudges === REQUIRED_SCORING_JUDGES
     };
   });
 
@@ -101,7 +109,7 @@ export function calculatePlaceMethodRankings(
     for (let right = left + 1; right < rows.length; right++) {
       let leftVotes = 0;
       let rightVotes = 0;
-      for (const judge of judges) {
+      for (const judge of scoringJudges) {
         const leftRank = judgeRanks[judge.id][rows[left].athlete.id];
         const rightRank = judgeRanks[judge.id][rows[right].athlete.id];
         if (leftRank === undefined || rightRank === undefined) continue;
@@ -112,7 +120,7 @@ export function calculatePlaceMethodRankings(
           rightVotes += 0.5;
         }
       }
-      const threshold = judges.length / 2;
+      const threshold = REQUIRED_SCORING_JUDGES / 2;
       if (leftVotes > threshold) {
         rows[left].pairwisePoints++;
         rows[left].wins++;
@@ -133,16 +141,24 @@ export function calculatePlaceMethodRankings(
   rows.sort((a, b) =>
     Number(b.complete) - Number(a.complete) ||
     b.pairwisePoints - a.pairwisePoints ||
-    b.averageScore - a.averageScore ||
     a.athlete.order - b.athlete.order
   );
   rows.forEach((row, index) => {
     const previous = rows[index - 1];
     row.finalRank = previous &&
       row.complete === previous.complete &&
-      row.pairwisePoints === previous.pairwisePoints &&
-      row.averageScore === previous.averageScore
+      row.pairwisePoints === previous.pairwisePoints
       ? previous.finalRank
+      : index + 1;
+  });
+
+  const byAverage = [...rows]
+    .filter(row => row.complete)
+    .sort((a, b) => b.averageScore - a.averageScore || a.athlete.order - b.athlete.order);
+  byAverage.forEach((row, index) => {
+    const previous = byAverage[index - 1];
+    row.totalScoreRank = previous && row.averageScore === previous.averageScore
+      ? previous.totalScoreRank
       : index + 1;
   });
   return rows;

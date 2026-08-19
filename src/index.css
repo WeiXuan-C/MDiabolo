@@ -57,7 +57,8 @@ body.simple-mode .list-button small,
 body.simple-mode .athlete-card small,
 body.simple-mode .display-popover small,
 body.simple-mode .card-heading p,
-body.simple-mode .bracket-help {
+body.simple-mode .bracket-help,
+body.simple-mode .dimension-weight {
   display: none !important;
 }
 
@@ -163,7 +164,23 @@ body.simple-mode .bracket-help {
 .judge-competition-grid label { grid-column: 1 / -1; }
 .athlete-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
 .athlete-card { position: relative; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .8rem; padding: 1rem; text-align: left; }
-.order { flex: 0 0 auto; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; background: #2b211d; color: #ff8b62; font-weight: 900; }
+.order {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 2.5rem;
+  height: 2.5rem;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: #2b211d;
+  color: #ff8b62;
+  padding-inline: .38rem;
+  font-weight: 900;
+  line-height: 1;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  white-space: nowrap;
+}
 .done { color: #6ee7a1; }
 .score-badge {
   min-width: 3.2rem;
@@ -184,7 +201,12 @@ body.simple-mode .bracket-help {
 .score-header h2, .score-header p { margin-bottom: 0; }
 .dimension-list { display: grid; gap: .65rem; padding-bottom: calc(5rem + var(--safe-bottom)); }
 .dimension { grid-template-columns: 1fr minmax(90px, 120px); align-items: center; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); padding: .8rem; }
-.dimension strong, .dimension small { display: block; }
+.dimension-title-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.dimension-weight-badge { display: inline-flex; align-items: center; width: fit-content; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, var(--panel)); color: #ff9c78; padding: .18rem .45rem; font-size: .72rem; font-weight: 850; line-height: 1.2; white-space: nowrap; }
+.dimension strong, .dimension small, .dimension-weight { display: block; }
+.dimension-weight { margin-top: .22rem; color: var(--muted); font-size: .78rem; font-weight: 650; line-height: 1.35; }
+.dimension-weight .i18n-pair { gap: .3em; }
+.dimension-weight .i18n-en { font-size: 1em; }
 .dimension input { text-align: center; font-size: 1.2rem; font-weight: 850; }
 .submit-bar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .8rem clamp(.8rem, 3vw, 1.5rem); padding-bottom: calc(.8rem + var(--safe-bottom)); border-top: 1px solid var(--line); background: rgb(20 20 22 / 98%); backdrop-filter: blur(20px); box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3); }
 .submit-bar small, .submit-bar strong { display: block; }
@@ -311,7 +333,9 @@ body.barcode-scanner-active .barcode-scanner-modal { visibility: visible; }
 .scanner-stop-button { width: min(320px, 74vw); background: rgb(30 30 34 / 76%); backdrop-filter: blur(8px); }
 .qr-card { text-align: center; }
 .qr-card img { display: block; width: min(300px, 100%); height: auto; margin: 1rem auto; border-radius: 10px; }
-.qr-export-actions { display: grid; gap: .55rem; margin-top: .8rem; }
+.qr-export-actions, .import-source-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
+.qr-export-actions { margin-top: .8rem; }
+.qr-export-actions > button, .import-source-actions > button { width: 100%; }
 .qr-data-copy {
   min-height: 76px;
   margin-top: .75rem;
@@ -508,7 +532,7 @@ body.barcode-scanner-active .barcode-scanner-modal { visibility: visible; }
 .ranking-detail-header > div { display: flex; align-items: center; gap: .75rem; min-width: 0; }
 .ranking-detail-header h2 { margin: 0; font-size: 1.25rem; }
 .ranking-detail-header small { display: block; color: var(--muted); overflow-wrap: anywhere; }
-.ranking-detail-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .35rem; border-block: 1px solid var(--line); padding-block: .55rem; }
+.ranking-detail-summary { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .35rem; border-block: 1px solid var(--line); padding-block: .55rem; }
 .ranking-detail-summary span, .score-detail-totals span, .dimension-breakdown span { min-width: 0; border: 0; border-radius: 0; background: transparent; padding: .2rem .25rem; }
 .ranking-detail-summary small, .score-detail-totals small, .dimension-breakdown small { display: block; color: var(--muted); font-size: .72rem; overflow-wrap: anywhere; }
 .ranking-detail-summary strong, .score-detail-totals strong, .dimension-breakdown strong { display: block; margin-top: .18rem; color: #fff; overflow-wrap: anywhere; }
@@ -614,6 +638,7 @@ body.barcode-scanner-active .barcode-scanner-modal { visibility: visible; }
   .role-grid, .athlete-grid, .two-column { grid-template-columns: 1fr; }
   .sync-preview-summary, .sync-group-metrics, .integration-metrics, .judge-progress-card { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sync-source-card { grid-template-columns: 1fr; }
+  .import-source-actions { grid-template-columns: 1fr; }
   .conflict-diff { grid-template-columns: 1fr; }
   .background-preview-card { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); padding: .9rem; border-radius: 16px; }
   .background-preview-stage { height: min(240px, 32dvh); min-height: 150px; }

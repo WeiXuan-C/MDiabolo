@@ -83,6 +83,101 @@ export type SyncPayload =
   | { kind: 'snapshot'; snapshot: DatabaseSnapshot }
   | { kind: 'actions'; package: ActionSyncPackage };
 
+function timestampValue(value: string | undefined): number {
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function mergeById<T extends { id: string }>(groups: T[][]): T[] {
+  const merged = new Map<string, T>();
+  for (const group of groups) {
+    for (const item of group) merged.set(item.id, item);
+  }
+  return Array.from(merged.values());
+}
+
+function mergeSubmittedRecords<T extends { id: string; submittedAt: string }>(groups: T[][]): T[] {
+  const merged = new Map<string, T>();
+  for (const group of groups) {
+    for (const item of group) {
+      const current = merged.get(item.id);
+      if (!current || timestampValue(item.submittedAt) >= timestampValue(current.submittedAt)) {
+        merged.set(item.id, item);
+      }
+    }
+  }
+  return Array.from(merged.values());
+}
+
+function shortHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).toUpperCase();
+}
+
+export function mergeDatabaseSnapshots(snapshots: DatabaseSnapshot[]): DatabaseSnapshot {
+  if (!snapshots.length) throw new Error('No database snapshots to merge');
+  const ordered = snapshots
+    .map((snapshot, index) => ({ snapshot, index }))
+    .sort((left, right) =>
+      timestampValue(left.snapshot.exportedAt) - timestampValue(right.snapshot.exportedAt) ||
+      left.index - right.index
+    )
+    .map(item => item.snapshot);
+  const latest = ordered.at(-1)!;
+  return {
+    protocol: 'mdiabolo-db-v1',
+    exportedAt: latest.exportedAt,
+    athletes: mergeById(ordered.map(snapshot => snapshot.athletes)),
+    competitions: mergeById(ordered.map(snapshot => snapshot.competitions)),
+    judges: mergeById(ordered.map(snapshot => snapshot.judges)),
+    events: mergeById(ordered.map(snapshot => snapshot.events)),
+    scores: mergeSubmittedRecords(ordered.map(snapshot => snapshot.scores)),
+    faults: mergeSubmittedRecords(ordered.map(snapshot => snapshot.faults)),
+    admins: mergeById(ordered.map(snapshot => snapshot.admins)),
+    settings: latest.settings
+  };
+}
+
+export function mergeDatabaseSyncPayloads(payloads: SyncPayload[]): SyncPayload {
+  if (!payloads.length) throw new Error('No database packages to merge');
+  if (payloads.length === 1) return payloads[0];
+
+  const actionPackages = payloads
+    .filter((payload): payload is Extract<SyncPayload, { kind: 'actions' }> => payload.kind === 'actions')
+    .map(payload => payload.package);
+  const snapshot = mergeDatabaseSnapshots(payloads.map(payload =>
+    payload.kind === 'actions' ? payload.package.snapshot : payload.snapshot
+  ));
+  if (!actionPackages.length) return { kind: 'snapshot', snapshot };
+
+  const packageKeys = actionPackages
+    .map(syncPackage => syncPackage.packageId || `${syncPackage.sourceDeviceName ?? ''}:${syncPackage.exportedAt}`)
+    .sort();
+  const sourceDeviceNames = Array.from(new Set(actionPackages.map(syncPackage => syncPackage.sourceDeviceName?.trim()).filter(Boolean)));
+  const exporterNames = Array.from(new Set(actionPackages.map(syncPackage => syncPackage.exporterName?.trim()).filter(Boolean)));
+  const latestPackage = [...actionPackages].sort((left, right) =>
+    timestampValue(left.exportedAt) - timestampValue(right.exportedAt)
+  ).at(-1)!;
+  return {
+    kind: 'actions',
+    package: {
+      protocol: 'mdiabolo-action-sync-v1',
+      packageId: `MERGED-${shortHash(packageKeys.join('|'))}`,
+      exportedAt: latestPackage.exportedAt,
+      sourceDeviceName: sourceDeviceNames.join(' + ') || undefined,
+      exporterName: exporterNames.join(' + ') || undefined,
+      // A multi-device field merge is additive. Deletes from one judge's
+      // device must never remove records supplied by another judge.
+      actions: [],
+      snapshot
+    }
+  };
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
   for (let index = 0; index < bytes.length; index += 0x8000) {
@@ -327,4 +422,31 @@ export async function rebuildDatabaseSyncPayloadAsync(chunks: DatabaseQrChunk[])
     return { kind: 'actions', package: validateActionSyncPackage(parsed as Partial<ActionSyncPackage>) };
   }
   throw new Error('Database QR snapshot is missing required data');
+}
+
+export async function rebuildDatabaseSyncPayloadsFromTextAsync(payload: string): Promise<SyncPayload[]> {
+  const lines = payload
+    .split(/\r?\n/)
+    .map(item => item.trim())
+    .filter(Boolean);
+  if (!lines.length) throw new Error('No database QR pages scanned');
+
+  const groups = new Map<string, DatabaseQrChunk[]>();
+  let simplePackageIndex = 0;
+  for (const line of lines) {
+    const chunk = decodeDatabaseQrChunk(line);
+    const key = chunk.id === 'ACTION' ? `ACTION:${simplePackageIndex++}` : chunk.id;
+    const existing = groups.get(key) ?? [];
+    groups.set(key, [...existing.filter(item => item.index !== chunk.index), chunk]);
+  }
+
+  const results: SyncPayload[] = [];
+  for (const [key, chunks] of groups) {
+    const expected = chunks[0]?.total ?? 0;
+    if (chunks.length !== expected) {
+      throw new Error(`Database package ${key} is incomplete: ${chunks.length}/${expected} pages scanned`);
+    }
+    results.push(await rebuildDatabaseSyncPayloadAsync(chunks));
+  }
+  return results;
 }

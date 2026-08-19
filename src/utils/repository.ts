@@ -128,6 +128,7 @@ class AppRepository {
           division TEXT,
           status TEXT NOT NULL,
           fault_deduction REAL NOT NULL,
+          scoring_rule_version TEXT,
           chief_judge TEXT,
           recorder TEXT,
           updated_at TEXT NOT NULL
@@ -149,6 +150,7 @@ class AppRepository {
         CREATE TABLE IF NOT EXISTS athletes (
           id TEXT PRIMARY KEY NOT NULL,
           display_order INTEGER NOT NULL,
+          competition_orders TEXT,
           name TEXT NOT NULL,
           name_zh TEXT,
           name_en TEXT,
@@ -219,6 +221,8 @@ class AppRepository {
         );
       `);
       await this.database.execute("ALTER TABLE athletes ADD COLUMN section TEXT", false).catch(() => undefined);
+      await this.database.execute("ALTER TABLE athletes ADD COLUMN competition_orders TEXT", false).catch(() => undefined);
+      await this.database.execute("ALTER TABLE competitions ADD COLUMN scoring_rule_version TEXT", false).catch(() => undefined);
       await this.seedNativeDatabaseIfNeeded();
     } catch (error) {
       console.warn('Native SQLite initialization failed; falling back to localStorage.', error);
@@ -337,11 +341,11 @@ class AppRepository {
     }
     if (key === 'competitions' && Array.isArray(value)) {
       await this.replaceNativeRows('competitions', value, `
-        INSERT INTO competitions (id, event_id, name, name_zh, name_en, type, region, division, status, fault_deduction, chief_judge, recorder, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO competitions (id, event_id, name, name_zh, name_en, type, region, division, status, fault_deduction, scoring_rule_version, chief_judge, recorder, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, (competition: any, updatedAt) => [
         competition.id, competition.eventId, competition.name, competition.nameZh ?? null, competition.nameEn ?? null,
-        competition.type, competition.region ?? '', competition.division ?? '', competition.status, competition.faultDeduction ?? 0,
+        competition.type, competition.region ?? '', competition.division ?? '', competition.status, competition.faultDeduction ?? 0, competition.scoringRuleVersion ?? null,
         competition.chiefJudge ?? null, competition.recorder ?? null, updatedAt
       ], transaction);
       const rounds = value.flatMap((competition: any) => (competition.rounds ?? []).map((round: any) => ({ ...round, competitionId: competition.id })));
@@ -355,10 +359,10 @@ class AppRepository {
     }
     if (key === 'athletes' && Array.isArray(value)) {
       await this.replaceNativeRows('athletes', value, `
-        INSERT INTO athletes (id, display_order, name, name_zh, name_en, school, age, gender, section, country, team_name, competition_ids, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO athletes (id, display_order, competition_orders, name, name_zh, name_en, school, age, gender, section, country, team_name, competition_ids, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, (athlete: any, updatedAt) => [
-        athlete.id, athlete.order, athlete.name, athlete.nameZh ?? null, athlete.nameEn ?? null, athlete.school ?? '',
+        athlete.id, athlete.order, JSON.stringify(athlete.competitionOrders ?? {}), athlete.name, athlete.nameZh ?? null, athlete.nameEn ?? null, athlete.school ?? '',
         athlete.age ?? null, athlete.gender ?? '', athlete.section ?? 'Open', athlete.country ?? '', athlete.teamName ?? null, JSON.stringify(athlete.competitionIds ?? []), updatedAt
       ], transaction);
     }
@@ -445,6 +449,7 @@ class AppRepository {
         division: row.division ?? '',
         status: row.status,
         faultDeduction: row.fault_deduction,
+        scoringRuleVersion: row.scoring_rule_version ?? undefined,
         chiefJudge: row.chief_judge ?? undefined,
         recorder: row.recorder ?? undefined,
         rounds: rounds.filter((round: any) => round.competition_id === row.id).map((round: any) => ({
@@ -467,6 +472,7 @@ class AppRepository {
       return (result.values ?? []).map((row: any) => ({
         id: row.id,
         order: row.display_order,
+        competitionOrders: parseJsonField<Record<string, number>>(row.competition_orders, {}),
         name: row.name,
         nameZh: row.name_zh ?? undefined,
         nameEn: row.name_en ?? undefined,

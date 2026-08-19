@@ -1,4 +1,5 @@
 import type { Athlete, Competition, EventConfig, Judge } from '../initialData';
+import { normalizeAthleteCompetitionOrders } from './athleteOrder';
 
 interface NamedEntity {
   id: string;
@@ -21,10 +22,10 @@ function seedById<T extends NamedEntity>(items: T[]): Map<string, T> {
 
 export function migrateAthletes(stored: Athlete[], seeds: Athlete[]): Athlete[] {
   const seedMap = seedById(seeds);
-  return stored.map(item => ({
+  return normalizeAthleteCompetitionOrders(stored.map(item => ({
     ...mergeName(item, seedMap.get(item.id)),
     competitionIds: item.competitionIds ?? seedMap.get(item.id)?.competitionIds ?? []
-  }));
+  })));
 }
 
 export function migrateJudges(stored: Judge[], seeds: Judge[]): Judge[] {

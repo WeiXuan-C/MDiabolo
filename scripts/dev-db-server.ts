@@ -59,6 +59,7 @@ db.exec(`
     division TEXT,
     status TEXT NOT NULL,
     fault_deduction REAL NOT NULL,
+    scoring_rule_version TEXT,
     chief_judge TEXT,
     recorder TEXT,
     updated_at TEXT NOT NULL
@@ -82,6 +83,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS athletes (
     id TEXT PRIMARY KEY NOT NULL,
     display_order INTEGER NOT NULL,
+    competition_orders TEXT,
     name TEXT NOT NULL,
     name_zh TEXT,
     name_en TEXT,
@@ -156,6 +158,15 @@ db.exec(`
   );
 `);
 
+const competitionColumns = db.pragma('table_info(competitions)') as { name: string }[];
+if (!competitionColumns.some(column => column.name === 'scoring_rule_version')) {
+  db.exec('ALTER TABLE competitions ADD COLUMN scoring_rule_version TEXT');
+}
+const athleteColumns = db.pragma('table_info(athletes)') as { name: string }[];
+if (!athleteColumns.some(column => column.name === 'competition_orders')) {
+  db.exec('ALTER TABLE athletes ADD COLUMN competition_orders TEXT');
+}
+
 function replaceRows<T>(
   table: string,
   rows: T[],
@@ -181,11 +192,11 @@ function mirrorStateTable(key: string, value: unknown) {
 
   if (key === 'competitions' && Array.isArray(value)) {
     replaceRows('competitions', value, `
-      INSERT INTO competitions (id, event_id, name, name_zh, name_en, type, region, division, status, fault_deduction, chief_judge, recorder, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO competitions (id, event_id, name, name_zh, name_en, type, region, division, status, fault_deduction, scoring_rule_version, chief_judge, recorder, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, (competition: any, updatedAt) => [
       competition.id, competition.eventId, competition.name, competition.nameZh ?? null, competition.nameEn ?? null,
-      competition.type, competition.region ?? '', competition.division ?? '', competition.status, competition.faultDeduction ?? 0,
+      competition.type, competition.region ?? '', competition.division ?? '', competition.status, competition.faultDeduction ?? 0, competition.scoringRuleVersion ?? null,
       competition.chiefJudge ?? null, competition.recorder ?? null, updatedAt
     ]);
     const rounds = value.flatMap((competition: any) => (competition.rounds ?? []).map((round: any) => ({ ...round, competitionId: competition.id })));
@@ -200,10 +211,10 @@ function mirrorStateTable(key: string, value: unknown) {
 
   if (key === 'athletes' && Array.isArray(value)) {
     replaceRows('athletes', value, `
-      INSERT INTO athletes (id, display_order, name, name_zh, name_en, school, age, gender, country, team_name, competition_ids, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO athletes (id, display_order, competition_orders, name, name_zh, name_en, school, age, gender, country, team_name, competition_ids, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, (athlete: any, updatedAt) => [
-      athlete.id, athlete.order, athlete.name, athlete.nameZh ?? null, athlete.nameEn ?? null, athlete.school ?? '',
+      athlete.id, athlete.order, JSON.stringify(athlete.competitionOrders ?? {}), athlete.name, athlete.nameZh ?? null, athlete.nameEn ?? null, athlete.school ?? '',
       athlete.age ?? null, athlete.gender ?? '', athlete.country ?? '', athlete.teamName ?? null, JSON.stringify(athlete.competitionIds ?? []), updatedAt
     ]);
   }
@@ -397,6 +408,7 @@ function readRelationalState(key: string): unknown | undefined {
       division: row.division ?? '',
       status: row.status,
       faultDeduction: row.fault_deduction,
+      scoringRuleVersion: row.scoring_rule_version ?? undefined,
       chiefJudge: row.chief_judge ?? undefined,
       recorder: row.recorder ?? undefined,
       rounds: rounds.filter(round => round.competition_id === row.id).map(round => ({
@@ -419,6 +431,7 @@ function readRelationalState(key: string): unknown | undefined {
     return rows.map(row => ({
       id: row.id,
       order: row.display_order,
+      competitionOrders: parseJsonField<Record<string, number>>(row.competition_orders, {}),
       name: row.name,
       nameZh: row.name_zh ?? undefined,
       nameEn: row.name_en ?? undefined,

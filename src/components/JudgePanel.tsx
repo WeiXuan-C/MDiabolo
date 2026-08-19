@@ -11,6 +11,7 @@ import {
   getDimensionsConfig,
 } from '../initialData';
 import { loadLocal, saveLocal } from '../utils/storage';
+import { withAthleteCompetitionOrder } from '../utils/athleteOrder';
 import { I18nText, formatText, localizedNameForMode, localizedNameNodeForMode, singleNameForMode, singleNameNodeForMode, type TextMode } from '../utils/i18n';
 
 type AthleteSortMode = 'order' | 'name' | 'country' | 'school' | 'status';
@@ -80,8 +81,10 @@ export function JudgePanel({
     });
   };
   const entrants = useMemo(
-    () => athletes.filter(athlete => round?.athleteIds.includes(athlete.id)),
-    [athletes, round]
+    () => athletes
+      .filter(athlete => round?.athleteIds.includes(athlete.id))
+      .map(athlete => withAthleteCompetitionOrder(athlete, competition?.id ?? '')),
+    [athletes, competition?.id, round]
   );
   const [athleteId, setAthleteId] = useState('');
   const athlete = entrants.find(item => item.id === athleteId);
@@ -193,11 +196,11 @@ export function JudgePanel({
       return a.order - b.order;
     });
 
-  const scoreValid = dimensions.length > 0 && dimensions.every(dimension => {
+  const total = dimensions.reduce((sum, dimension) => sum + (Number(values[dimension.key]) || 0), 0);
+  const scoreValid = total <= 100 && dimensions.length > 0 && dimensions.every(dimension => {
     const value = Number(values[dimension.key]);
     return values[dimension.key] !== '' && Number.isFinite(value) && value >= 0 && value <= dimension.max;
   });
-  const total = dimensions.reduce((sum, dimension) => sum + (Number(values[dimension.key]) || 0), 0);
 
   const setDimension = (key: string, value: string, max: number) => {
     if (!competition || !round || !roundIsScorable || !athlete) return;
@@ -373,7 +376,17 @@ export function JudgePanel({
                   <div className="dimension-list">
                     {dimensions.map(dimension => (
                       <label className="dimension" key={dimension.key}>
-                        <span><strong>{language === 'zh' ? dimension.label : dimension.labelEn}</strong><small>{dimension.labelEn} · 0–{dimension.max}</small></span>
+                        <span className="dimension-copy">
+                          <span className="dimension-title-row">
+                            <strong>{B(dimension.label, dimension.labelEn)}</strong>
+                            <span className="dimension-weight-badge">
+                              {B(`${dimension.max}% · 满分 ${dimension.max}`, `${dimension.max}% · Max ${dimension.max}`)}
+                            </span>
+                          </span>
+                          <span className="dimension-weight">
+                            {B(`评分范围 0–${dimension.max}`, `Score range 0–${dimension.max}`)}
+                          </span>
+                        </span>
                         <input
                           inputMode="decimal"
                           type="number"
@@ -381,14 +394,14 @@ export function JudgePanel({
                           max={dimension.max}
                           step="0.1"
                           value={values[dimension.key] ?? ''}
-                          onChange={event => setDimension(dimension.key, event.target.value, Math.min(dimension.max, 30))}
-                          aria-label={`${dimension.label}分数 · ${dimension.labelEn} score`}
+                          onChange={event => setDimension(dimension.key, event.target.value, dimension.max)}
+                          aria-label={`${dimension.label}，权重 ${dimension.max}%，满分 ${dimension.max} · ${dimension.labelEn}, weight ${dimension.max}%, maximum ${dimension.max}`}
                         />
                       </label>
                     ))}
                   </div>
                   <div className="submit-bar">
-                    <span><small>{B('总分', 'Total')}</small><strong>{total.toFixed(1)}</strong></span>
+                    <span><small>{B('总分', 'Total')}</small><strong>{total.toFixed(1)} / 100</strong></span>
                     <button className={`primary-button ${saving ? 'is-busy' : ''} ${savedPulse ? 'is-done saved-pulse' : ''}`} disabled={!scoreValid || saving} aria-busy={saving} onClick={() => void submitScore()}>
                       <Save size={18} />{saving ? B('保存中', 'Saving') : savedPulse ? B('已保存', 'Saved') : B('保存评分', 'Save score')}
                     </button>
